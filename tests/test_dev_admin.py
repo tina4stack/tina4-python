@@ -518,23 +518,102 @@ class TestAPIHandlers:
     @pytest.mark.skipif(not os.path.exists("/proc/self/status"),
                         reason="needs /proc to read the kernel's own peak RSS")
     async def test_memory_figures_match_the_real_peak_rss(self, mock_req, mock_resp):
-        """/__dev memory figures are this process's peak RSS in MB.
+        """/__dev/api/status peak_memory_mb is this process's peak RSS in MB.
 
         ru_maxrss is kilobytes on Linux; dividing it by 1024 twice reported
         ~0.04 MB for a 40 MB server. The kernel's VmHWM is the same peak,
         read independently.
         """
-        from tina4_python.dev_admin import _api_status, _api_system
+        from tina4_python.dev_admin import _api_status
         status = await _api_status(mock_req, mock_resp)
-        system = await _api_system(mock_req, mock_resp)
         with open("/proc/self/status") as fh:
             vm_hwm_kb = next(int(line.split()[1]) for line in fh if line.startswith("VmHWM:"))
         real_mb = vm_hwm_kb / 1024
-        for name, value in (("status.peak_memory_mb", status["peak_memory_mb"]),
+        value = status["peak_memory_mb"]
+        assert 0.75 * real_mb <= value <= 1.25 * real_mb, (
+            f"status.peak_memory_mb={value} MB, but the kernel reports a peak of {real_mb:.1f} MB"
+        )
+
+    @staticmethod
+    def _kernel_vmrss_mb():
+        """VmRSS from /proc/self/status in MB, or None where it is not there."""
+        try:
+            with open("/proc/self/status") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) / 1024
+        except OSError:
+            pass
+        return None
+
+    @pytest.mark.asyncio
+    async def test_memory_figures_are_current_rss_not_peak(self, mock_req, mock_resp, monkeypatch):
+        """Without psutil, status.memory_usage_mb and system.memory_mb (the
+        dashboard's "Memory") are the current RSS, not the peak.
+
+        Both used to be the peak, so a server that had once grown and then
+        freed the memory kept reporting the old high-water mark.
+        """
+        import gc
+        import sys
+        if self._kernel_vmrss_mb() is None:
+            pytest.skip("needs VmRSS in /proc/self/status to read the kernel's current RSS")
+        monkeypatch.setitem(sys.modules, "psutil", None)  # as if not installed
+        blob = bytearray(150 * 1024 * 1024)
+        for i in range(0, len(blob), 4096):
+            blob[i] = 1
+        del blob
+        gc.collect()
+        from tina4_python.dev_admin import _api_status, _api_system
+        status = await _api_status(mock_req, mock_resp)
+        system = await _api_system(mock_req, mock_resp)
+        real_mb = self._kernel_vmrss_mb()
+        assert status["peak_memory_mb"] - real_mb > 100, "allocation did not raise the peak"
+        for name, value in (("status.memory_usage_mb", status["memory_usage_mb"]),
                             ("system.memory_mb", system["memory_mb"])):
-            assert 0.75 * real_mb <= value <= 1.25 * real_mb, (
-                f"{name}={value} MB, but the kernel reports a peak of {real_mb:.1f} MB"
+            # Near the kernel's current RSS, and well clear of the peak, so the
+            # check cannot pass on the peak however large the baseline RSS is.
+            assert value is not None and abs(value - real_mb) <= 25 + 0.1 * real_mb \
+                and status["peak_memory_mb"] - value > 100, (
+                f"{name}={value} MB, but the kernel reports a current RSS of "
+                f"{real_mb:.1f} MB (peak {status['peak_memory_mb']} MB)"
             )
+
+    @pytest.mark.asyncio
+    async def test_memory_figures_use_psutil_when_installed(self, mock_req, mock_resp, monkeypatch):
+        """With psutil installed, both current-memory figures are its RSS."""
+        import sys
+        import types
+        import tina4_python.dev_admin as dev_admin
+
+        class _Proc:
+            def memory_info(self):
+                return types.SimpleNamespace(rss=42 * 1024 * 1024)
+
+        monkeypatch.setitem(sys.modules, "psutil", types.SimpleNamespace(Process=_Proc))
+        monkeypatch.setattr(dev_admin, "_peak_rss_mb", lambda: 500.0)
+        status = await dev_admin._api_status(mock_req, mock_resp)
+        system = await dev_admin._api_system(mock_req, mock_resp)
+        assert status["memory_usage_mb"] == 42.0
+        assert system["memory_mb"] == 42.0
+
+    @pytest.mark.asyncio
+    async def test_memory_figures_never_fall_back_to_peak(self, mock_req, mock_resp, monkeypatch):
+        """Where current RSS cannot be read (no /proc, no psutil: macOS,
+        Windows), status keeps its stable 0.0 and system reports None ("?" on
+        the dashboard) rather than borrowing the peak."""
+        import tina4_python.dev_admin as dev_admin
+
+        def unmeasurable():
+            raise OSError("no psutil, no /proc")
+
+        monkeypatch.setattr(dev_admin, "_peak_rss_mb", lambda: 500.0)
+        monkeypatch.setattr(dev_admin, "_current_rss_mb", unmeasurable)
+        status = await dev_admin._api_status(mock_req, mock_resp)
+        system = await dev_admin._api_system(mock_req, mock_resp)
+        assert status["peak_memory_mb"] == 500.0
+        assert status["memory_usage_mb"] == 0.0
+        assert system["memory_mb"] is None
 
     @pytest.mark.parametrize("platform, raw, mb", [
         ("linux", 40 * 1024, 40.0),               # kilobytes
