@@ -88,7 +88,9 @@ def get_framework_frond():
     if _framework_frond is not None:
         user_engine = get_frond()
         _framework_frond._filters.update(user_engine._filters)
-        _framework_frond._globals.update(user_engine._globals)
+        # Only the user engine's own (instance) globals: class globals are
+        # already live on every engine, so copying them would freeze them.
+        _framework_frond._globals.maps[0].update(user_engine._globals.maps[0])
     return _framework_frond
 
 

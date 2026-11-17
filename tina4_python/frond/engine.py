@@ -25,6 +25,7 @@ import json
 import math
 import secrets
 import time
+from collections import ChainMap
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, date
@@ -1969,6 +1970,8 @@ class Frond:
     # When a module creates ``frond = Frond()`` and a hot-reload
     # re-executes that line, the NEW instance inherits everything
     # previously registered via add_global / add_filter / add_test.
+    # Globals are read from here at render time, so they also reach
+    # engines that already exist (ADR-0106).
     _class_globals: dict = {}
     _class_filters: dict = {}
     _class_tests: dict = {}
@@ -1995,7 +1998,6 @@ class Frond:
     def __init__(self, template_dir: str = "src/templates"):
         self.template_dir = Path(template_dir)
         self._filters = dict(_BUILTIN_FILTERS)
-        self._globals = {}
         self._tests = {}
         self._cache: dict[str, str] = {}
         # Sandboxing
@@ -2032,28 +2034,34 @@ class Frond:
             self._cache_ttl = 0
 
         # Built-in global functions
-        self._globals["form_token"] = _form_token
-        self._globals["formTokenValue"] = _form_token_value
-        self._globals["form_token_value"] = _form_token_value
-        self._globals["range"] = _frond_range
+        builtin_globals = {
+            "form_token": _form_token,
+            "formTokenValue": _form_token_value,
+            "form_token_value": _form_token_value,
+            "range": _frond_range,
+        }
 
         # Debug helper: {{ dump(x) }} — gated on TINA4_DEBUG=true.
         # Both this global and the |dump filter call _render_dump() which
         # returns an empty string in production so dump never leaks state.
-        self._globals["dump"] = _render_dump
+        builtin_globals["dump"] = _render_dump
 
         # CSP nonce: {{ csp_nonce() }} returns the current response's nonce so a
         # template can serve an inline <style>/<script> under the strict default
         # Content-Security-Policy — <style nonce="{{ csp_nonce() }}">. The value
         # matches the 'nonce-X' the security middleware puts in the CSP header.
         from tina4_python.core.csp import csp_nonce as _csp_nonce
-        self._globals["csp_nonce"] = _csp_nonce
+        builtin_globals["csp_nonce"] = _csp_nonce
 
-        # Restore any globals/filters/tests registered on prior instances.
-        # This is the key to surviving hot-reloads: app.py calls
-        # frond.add_global("t", _t) once, the class remembers it, and
-        # every future Frond() instance gets it automatically.
-        self._globals.update(Frond._class_globals)
+        # Globals resolve in three layers, highest first: this instance's own
+        # add_global calls, the class registry, the built-ins. The class layer
+        # is the LIVE ``Frond._class_globals`` dict, not a copy, so a
+        # ``Frond.add_global(...)`` made after this engine exists (after the
+        # first ``response.render``, say) still reaches every template it
+        # renders. Instance writes land in the first map only, so they stay
+        # local to this engine (ADR-0052, ADR-0106). Filters and tests are still drained
+        # once, here: that is what survives hot-reloads for them.
+        self._globals = ChainMap({}, Frond._class_globals, builtin_globals)
         self._filters.update(Frond._class_filters)
         self._tests.update(Frond._class_tests)
 
@@ -2212,9 +2220,14 @@ class Frond:
         else:
             instance._tests[name] = fn
 
+    def _context(self, data: dict | None) -> dict:
+        """Build a render context: built-ins < class globals < instance globals < data."""
+        local_globals, class_globals, builtin_globals = self._globals.maps
+        return {**builtin_globals, **class_globals, **local_globals, **(data or {})}
+
     def render(self, template: str, data: dict = None) -> str:
         """Render a template with data. Uses token caching for performance."""
-        context = {**self._globals, **(data or {})}
+        context = self._context(data)
 
         # Resolve file path and check mtime for cache validity
         path = self.template_dir / template
@@ -2257,7 +2270,7 @@ class Frond:
 
     def render_string(self, source: str, data: dict = None) -> str:
         """Render a template string directly. Uses token+AST caching."""
-        context = {**self._globals, **(data or {})}
+        context = self._context(data)
 
         key = hashlib.md5(source.encode()).hexdigest()
         cached = self._compiled_strings.get(key)
