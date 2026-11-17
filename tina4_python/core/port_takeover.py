@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -233,6 +234,49 @@ def _port_holders(port: int) -> list[str]:
     return []
 
 
+def _bindable(host: str, port: int) -> bool:
+    """True when a plain TCP listener on *host*:*port* binds right now.
+
+    SO_REUSEADDR off Windows only, as the server's own bind does: on POSIX it
+    lets a TIME_WAIT leftover pass but still fails against a live listener;
+    on Windows it would let the probe bind over a live listener.
+    """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            if sys.platform != "win32":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((host.strip("[]"), port))
+            probe.listen(1)
+    except (OSError, ValueError, OverflowError):
+        return False
+    return True
+
+
+def _refusal(port: int, dev: bool, no_takeover: bool, host: str | None) -> TakeoverResult | None:
+    """The result to return before any holder lookup, or None to carry on.
+
+    Takeover is refused when opted out or outside dev mode. Before a bind, the
+    caller passes the host it will bind: if that bind succeeds, nothing holds
+    the port, so there is nothing to refuse and nothing to say.
+    """
+    if dev and not no_takeover:
+        return None
+    if host is not None and _bindable(host, port):
+        return TakeoverResult(NOTHING, port)
+    if no_takeover:
+        return TakeoverResult(
+            REFUSED_OPTOUT, port,
+            message=(f"Port {port} is in use and takeover is disabled "
+                     f"(TINA4_NO_TAKEOVER/--no-kill) -- free it or choose another port."),
+        )
+    return TakeoverResult(
+        REFUSED_PROD, port,
+        message=(f"Port {port} is in use; takeover is disabled outside dev mode "
+                 f"-- free it or choose another port."),
+    )
+
+
 # ── the ONE takeover entry point (CLI + runtime both call this) ────────────
 
 def take_over_port(
@@ -242,6 +286,7 @@ def take_over_port(
     no_takeover: bool,
     base_dir: str | None = None,
     grace: float = 0.5,
+    host: str | None = None,
 ) -> TakeoverResult:
     """Reclaim *port* ONLY from an identity-confirmed Tina4 dev server.
 
@@ -257,19 +302,15 @@ def take_over_port(
 
     ``dev`` and ``no_takeover`` are passed in so this stays pure and directly
     testable; the callers resolve them from :func:`is_dev` / :func:`no_takeover_opted_out`.
+
+    Before a bind, the caller passes the ``host`` it will bind. When takeover
+    would be refused and that bind succeeds, nothing holds the port: there is
+    nothing to refuse and nothing to say (NOTHING, no message). Without it, every
+    start with debug off or ``--no-kill`` said a free port was in use.
     """
-    if no_takeover:
-        return TakeoverResult(
-            REFUSED_OPTOUT, port,
-            message=(f"Port {port} is in use and takeover is disabled "
-                     f"(TINA4_NO_TAKEOVER/--no-kill) -- free it or choose another port."),
-        )
-    if not dev:
-        return TakeoverResult(
-            REFUSED_PROD, port,
-            message=(f"Port {port} is in use; takeover is disabled outside dev mode "
-                     f"-- free it or choose another port."),
-        )
+    early = _refusal(port, dev, no_takeover, host)
+    if early is not None:
+        return early
     if in_container():
         return TakeoverResult(SKIPPED_CONTAINER, port)
 
