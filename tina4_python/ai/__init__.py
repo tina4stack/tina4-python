@@ -497,8 +497,8 @@ def generate_context(tool_name: str = "claude-code") -> str:
 async def list_users(request, response):
     return response({"users": []})
 
-@post("/api/users")
 @noauth()
+@post("/api/users")
 async def create_user(request, response):
     return response({"created": request.body["name"]}, 201)'''
 
@@ -719,7 +719,7 @@ This project uses Tina4 Python. All features are built in — do not install ext
 ## CLI
 
 ```bash
-tina4python serve       # Dev server on port 7145
+tina4python serve       # Dev server on port 7146
 tina4python migrate     # Run migrations
 tina4python test        # Run tests
 tina4python routes      # List routes

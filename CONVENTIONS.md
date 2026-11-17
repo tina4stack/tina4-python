@@ -21,8 +21,8 @@ from tina4_python.core.router import get, post, noauth, secured
 async def list_users(request, response):
     return response({"users": []})
 
-@post("/api/users")
 @noauth()
+@post("/api/users")
 async def create_user(request, response):
     return response({"created": request.body["name"]}, 201)
 ```

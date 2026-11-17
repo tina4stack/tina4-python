@@ -12,8 +12,8 @@ from tina4_python.core.router import get, post, put, delete, noauth, secured
 async def list_users(request, response):
     return response({"users": []})
 
-@post("/api/users")
 @noauth()
+@post("/api/users")
 async def create_user(request, response):
     return response({"created": request.body["name"]}, 201)
 ```
@@ -28,10 +28,10 @@ async def create_user(request, response):
 - Queue job payload: `job.payload` not `job.data`
 - Database pagination: `offset=` not `skip=`
 - Entry point: `from tina4_python.core import run; run()`
-- Default port: 7145
+- Default port: 7146
 
 ## Project Structure
 
 Routes in `src/routes/`, ORM in `src/orm/`, templates in `src/templates/`, static in `src/public/`.
 
-See llms.txt for complete API reference.
+For the complete API reference, read `CLAUDE.md` in this repo and the docs it links. `llms.txt` is the link index (llmstxt.org format); https://tina4.com/llms-full.txt has the full documentation in one file.
