@@ -1970,11 +1970,14 @@ class Frond:
     # When a module creates ``frond = Frond()`` and a hot-reload
     # re-executes that line, the NEW instance inherits everything
     # previously registered via add_global / add_filter / add_test.
-    # Globals are read from here at render time, so they also reach
-    # engines that already exist (ADR-0106).
+    # They are read from here at render time, so they also reach engines
+    # that already exist (ADR-0106, ADR-0107).
     _class_globals: dict = {}
     _class_filters: dict = {}
     _class_tests: dict = {}
+    # Bumped on every class-level filter/test change, so an engine knows when
+    # to rebuild its merged filter/test maps (see _sync_registries).
+    _class_registry_version: int = 0
     # Live blocks: name -> body template source (registered when a {% live %}
     # block renders); name -> data provider (registered via @live_source).
     _class_live_fragments: dict = {}
@@ -1991,14 +1994,18 @@ class Frond:
         cls._class_globals.clear()
         cls._class_filters.clear()
         cls._class_tests.clear()
+        Frond._class_registry_version += 1
         cls._class_live_fragments.clear()
         cls._class_live_sources.clear()
         cls._class_live_ws_paths.clear()
 
     def __init__(self, template_dir: str = "src/templates"):
         self.template_dir = Path(template_dir)
-        self._filters = dict(_BUILTIN_FILTERS)
-        self._tests = {}
+        # This engine's own add_filter / add_test calls (instance-local).
+        self._local_filters: dict = {}
+        self._local_tests: dict = {}
+        self._registry_version = -1
+        self._sync_registries()  # builds self._filters / self._tests
         self._cache: dict[str, str] = {}
         # Sandboxing
         self._sandbox = False
@@ -2059,11 +2066,23 @@ class Frond:
         # ``Frond.add_global(...)`` made after this engine exists (after the
         # first ``response.render``, say) still reaches every template it
         # renders. Instance writes land in the first map only, so they stay
-        # local to this engine (ADR-0052, ADR-0106). Filters and tests are still drained
-        # once, here: that is what survives hot-reloads for them.
+        # local to this engine (ADR-0052, ADR-0106).
         self._globals = ChainMap({}, Frond._class_globals, builtin_globals)
-        self._filters.update(Frond._class_filters)
-        self._tests.update(Frond._class_tests)
+
+    def _sync_registries(self) -> None:
+        """Rebuild the merged filter/test maps when the class registry changed.
+
+        Same layering as globals -- built-ins < class < this instance -- so a
+        ``Frond.add_filter`` / ``add_test`` made after this engine exists still
+        reaches every template it renders (ADR-0107). Filter lookup is on the
+        hot path, so the merge is a plain dict rebuilt only when the class
+        registry version moves, never a per-lookup chain.
+        """
+        if self._registry_version == Frond._class_registry_version:
+            return
+        self._filters = {**_BUILTIN_FILTERS, **Frond._class_filters, **self._local_filters}
+        self._tests = {**Frond._class_tests, **self._local_tests}
+        self._registry_version = Frond._class_registry_version
 
     def sandbox(self, allowed_filters: list[str] = None,
                 allowed_tags: list[str] = None,
@@ -2192,7 +2211,9 @@ class Frond:
         """
         if instance is None:
             cls._class_filters[name] = fn
+            Frond._class_registry_version += 1
         else:
+            instance._local_filters[name] = fn
             instance._filters[name] = fn
 
     @_ClassOrInstanceMethod
@@ -2217,11 +2238,18 @@ class Frond:
         """
         if instance is None:
             cls._class_tests[name] = fn
+            Frond._class_registry_version += 1
         else:
+            instance._local_tests[name] = fn
             instance._tests[name] = fn
 
     def _context(self, data: dict | None) -> dict:
-        """Build a render context: built-ins < class globals < instance globals < data."""
+        """Build a render context: built-ins < class globals < instance globals < data.
+
+        Every render starts here, so this is also where the filter/test maps
+        catch up with any class registration made since the last render.
+        """
+        self._sync_registries()
         local_globals, class_globals, builtin_globals = self._globals.maps
         return {**builtin_globals, **class_globals, **local_globals, **(data or {})}
 
