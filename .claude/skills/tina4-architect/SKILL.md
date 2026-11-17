@@ -6,12 +6,11 @@ description: >
   "architect this", "which framework should I use", "how should I structure this", "how do I deploy".
   Owns the decisions BEFORE any file is scaffolded: backend language, database, sessions, cache,
   queue, auth, realtime, AI provider, deployment, project layout. Then maps the user journeys, the
-  system flows, and the completeness net (the states, edges, authz, failure and concurrency that
-  complex builds miss) so features come from real user goals, not invention. Also triggers on "map the
-  user journey", "what's the flow", "what are we missing", "trace the system". Records the choices in
-  TINA4.md and seeds plan/ with goals, journeys, flows and initial ADRs. Hands off to the matching
-  tina4-developer-<lang> skill. On a scaffolded project (TINA4.md present) it runs only when asked
-  explicitly: "map the journeys / flows" or "re-architect".
+  system flows, and the completeness net (states, edges, authz, failure, concurrency) so features
+  come from real user goals. Also triggers on "map the user journey", "what's the flow", "what are we
+  missing", "trace the system". Records the choices in TINA4.md and seeds plan/ with goals, journeys,
+  flows and initial ADRs, then hands off to tina4-developer-<lang>. On a scaffolded project (TINA4.md
+  present) it runs only when asked: "map the journeys / flows" or "re-architect".
 ---
 
 # Tina4 Architect — decisions before code
