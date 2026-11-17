@@ -67,6 +67,18 @@ breaking what must not break. Three tiers:
   verified working end to end, a clean deploy lands — on its own line with a short geeky one-liner.
   Never faked (no green run, no Bazinga) and never on a trivial step.
 
+  **Never patch the framework to make your code work - report it.** When Tina4 does not do what
+  your code needs, or looks broken, do NOT monkey-patch it: no assigning over `tina4_python`
+  functions, classes or module attributes at runtime, no subclass-and-swap of framework
+  internals, no editing the installed package (`.venv`, `site-packages`).
+  A patch hides the bug from everyone else, silently breaks on the next upgrade, and leaves the
+  next agent debugging a framework that no longer matches its docs. Instead: reproduce it in the
+  smallest app you can, report it with that reproduction and the version
+  (`python -c "import tina4_python; print(tina4_python.__version__)"`) at
+  https://github.com/tina4stack/tina4-python/issues, tell the developer, and meanwhile use a supported public
+  API. A temporary workaround lives in YOUR code, never in the framework's, and carries a
+  `tina4:` comment linking the issue.
+
 - 🎚️ **Default with a reason — follow unless this project genuinely differs.**
   The reuse ladder; the plan-driven workflow; one build shape per project (monolith with Frond
   pages and optional tina4-js islands / decoupled API + SPA / microservices); the project conventions (one resource per file, no inline styles, CSS
