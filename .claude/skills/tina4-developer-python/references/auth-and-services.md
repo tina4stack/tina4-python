@@ -285,10 +285,11 @@ async def chat(connection, event, data):
 
 ### Client (frond.js)
 ```javascript
-const ws = Frond.ws("/ws/chat", {
-    onMessage: (data) => {
-        document.getElementById("messages").innerHTML += `<p>${data.text}</p>`;
-    }
+const ws = frond.ws("/ws/chat");                 // window.frond, auto-reconnect on by default
+ws.on("message", (data) => {
+    const line = document.createElement("p");
+    line.textContent = data.text;                // textContent, never innerHTML, for user text
+    document.getElementById("messages").append(line);
 });
 
 document.getElementById("send").onclick = () => {
@@ -296,21 +297,37 @@ document.getElementById("send").onclick = () => {
 };
 ```
 
+`frond.ws` does not send the bearer token. For a `@secured()` socket, pass it as a subprotocol:
+`frond.ws(url, { protocols: ["bearer", frond.token] })`.
+
 ## GraphQL
 
-Auto-generate a GraphQL API from your ORM models. Build the instance, register your models, then
-designate it the default so the framework serves it:
+Auto-generate a GraphQL schema from your ORM models, then serve it from a `@post` route you
+write. **Nothing mounts `/graphql` for you.** `GraphQL.set_default(gql)` only stores the instance as
+the default singleton, so `@GraphQL.resolve` decorators that run later attach to it. It registers
+no route and there is no GraphiQL page.
 
 ```python
+# src/routes/graphql.py
 from tina4_python import GraphQL
+from tina4_python.core.router import post
 
 gql = GraphQL()
-gql.auto_register(User, Post)
-GraphQL.set_default(gql)   # serves the schema at /graphql (GET = GraphiQL IDE, POST = queries)
+gql.auto_register(User, Post)   # from_orm() per model; a no-op when TINA4_GRAPHQL_AUTO_SCHEMA=false
+GraphQL.set_default(gql)        # optional: lets later @GraphQL.resolve calls reach this instance
+
+@post("/graphql")               # Bearer-protected by default, like every write route
+async def graphql_endpoint(request, response):
+    result = gql.execute(request.body.get("query", ""), request.body.get("variables") or {})
+    return response(result)     # a dict, so it goes out as JSON
 ```
 
-The endpoint path is `/graphql` by default (override with `TINA4_GRAPHQL_ENDPOINT`). There is no
-`register_route` method — `set_default(gql)` is what wires the live schema.
+`gql.execute(...)` returns a dict (`{"data": ..., "errors": [...]}`). `gql.execute_json(...)`
+returns the same thing as a JSON STRING, and a route that returns a string sends HTML, so use
+`execute` in a route. `gql.endpoint` (from `TINA4_GRAPHQL_ENDPOINT`, default `/graphql`) is only a
+value you can read when you pick the route path. Add `@noauth()` only for an anonymous read API.
+From the browser, `frond.graphql("/graphql", query, variables, (data, errors) => ...)` posts the
+query and sends the bearer token on your own origin.
 
 Decorator-based resolvers register at import time:
 ```python
@@ -321,7 +338,7 @@ def by_email(root, args, ctx):
     return User.find({"email": args["email"]})[0:1]
 ```
 
-Visit `/graphql` in the browser for the GraphiQL IDE.
+To explore the schema, call `gql.introspect()`. There is no built-in GraphiQL page.
 
 ## Events
 

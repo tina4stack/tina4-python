@@ -1,6 +1,6 @@
 ---
 name: tina4-developer-python
-updated_for_version: 3.13.105
+updated_for_version: 3.13.147
 description: >
   Use whenever a developer is building a Python application with the Tina4 framework
   (tina4-python). Trigger when the user wants to create routes, define ORM models, write Frond
@@ -23,39 +23,83 @@ it's a route.
 
 > 🤖 **Skill-active marker.** While this Tina4 skill is guiding your work, **begin every reply with the 🤖 emoji** so the developer can see at a glance that Tina4 conventions are engaged. Drop it only once the conversation has clearly moved off Tina4.
 
+## Contents
+
+Read top to bottom once; then jump by section. Deep detail lives in `references/` — load on demand.
+
+**Orientation**
+- Announce before you act · Detect if you are stale — how this skill keeps itself honest
+- The Tina4 Working Method — journeys, sibling skills, outcome-first, delegate, plan, tests-first, scaffold, verify, report
+- **Degrees of freedom** — what is inviolable vs. a default vs. your judgement (read this next)
+
+**Before you write code**
+- The reuse ladder · Retrieve the current API with `tina4_context` · Verify Against the Live API
+- The Tina4 AI Coder Rule Path · Quick Start · Lazy means less code, not a flimsier path
+
+**Choosing the shape**
+- Two Ways to Build — monolithic (Frond, with tina4-js islands where a page needs them) · API + reactive frontend · microservices + queues; the scaling guide; one owner per piece of DOM
+- The Golden Rules (incl. authentication — don't reach for `@noauth()`)
+
+**Running the project**
+- Language Version · Staying current (`tina4` updates) · Environment Configuration
+- Testing · Deployment · Plan First
+
+**Reference files** (`references/`, read on demand)
+- `routes-and-api.md` · `data-and-orm.md` · `templates-and-frontend.md` · `auth-and-services.md`
+- `realtime.md` · `web-push.md` · `deployment.md` · `ai-coder-rule-path.svg`
+
+## Degrees of freedom
+
+Not every line here carries the same weight. Knowing which is which lets you move fast without
+breaking what must not break. Three tiers:
+
+- 🔒 **Non-negotiable — never skip, however small the task.**
+  The **tina4 client (the Rust CLI) installed and on PATH before any work** — verify with
+  `tina4 --version`; it compiles SCSS, watches files and serves, so `python app.py` is never the way
+  (use `tina4 serve`). **Scaffold, never hand-roll** — `tina4 init` for a project, `tina4 generate
+  model|route|migration|middleware <name>` for pieces (the full flag set is in the `tina4-cli`
+  skill). **Use Tina4's built-ins** (Auth, ORM, Queue, Api, Cache, Sessions, Frond, GraphQL,
+  WebSocket) — don't add a dependency for what the framework ships. **Security by default** —
+  parameterised SQL, auto-escaped output, auth on write routes (don't reach for `@noauth()`),
+  `TINA4_SECRET` from env. **All schema changes via migrations.** **Real tests for your own code**
+  — no mocks against a real dependency. **The markers:** the 🤖 skill-active marker above, and
+  💥 **Bazinga!** on an EARNED win — your test suite goes green on a real dependency, a feature is
+  verified working end to end, a clean deploy lands — on its own line with a short geeky one-liner.
+  Never faked (no green run, no Bazinga) and never on a trivial step.
+
+- 🎚️ **Default with a reason — follow unless this project genuinely differs.**
+  The reuse ladder; the plan-driven workflow; one build shape per project (monolith with Frond
+  pages and optional tina4-js islands / decoupled API + SPA / microservices); the project conventions (one resource per file, no inline styles, CSS
+  variables, `base.twig` inheritance, constants not magic values, thin routes over a service layer).
+  Depart deliberately and say why — not by drift.
+
+- 🧭 **Judgement — read the task and choose.**
+  Which build shape fits; how much to scaffold vs. write by hand; how wide to cast a feature;
+  verbosity; ask-first vs. decide-and-proceed. The skill gives the heuristic; you read the situation.
+  (Note: cross-framework parity, framework releases and installer signing are NOT your concern here —
+  those live in the `tina4-maintainer` skill, for people building Tina4 itself.)
+
 ## Announce before you act
 
-**Say what you are about to do, in one line, before you do it.** A developer
-who can see the plan can stop it before you spend their afternoon undoing it.
+**Announce the plan once, then announce again before each destructive or multi-file step.** A
+developer who can see the plan can stop it before you spend their afternoon undoing it.
 
-Three announcements every substantive action carries:
+1. **Plan** — once, at the top of your first response for a slice, before any file writes: one
+   line naming the files you will touch and the commands you will run.
+2. **Before a destructive or multi-file step** — one line, so the developer can stop it:
+   - a schema migration (hard to reverse);
+   - deleting or overwriting files or data;
+   - adding a dependency (it leaves a trace in the manifest and lockfile);
+   - editing `app.py` (the boot file);
+   - scaffolding or writing more than 2 files in one step (the developer may want a subset).
+3. **Done** — after the slice: what changed and what was run, so the developer knows what to
+   undo. `Wrote <path>` / `Ran <command> — <one-line result>`.
 
-1. **Plan** — one line naming every file you'll touch and every command
-   you'll run for the current slice. Written at the top of your first
-   response for a slice, before any file writes.
-2. **Next** — one line before each step, so the developer can stop between
-   steps rather than after all of them. Formula: `About to: <verb> <path or command>`.
-3. **Done** — one line after each step so the developer knows what to undo.
-   Formula: `Wrote <path>` / `Ran <command> — <one-line result>`.
+Do NOT prefix every ordinary step with "About to:" or "Now:". The file and command cards already
+show each action. Between the plan and the next destructive or multi-file step, just work.
 
-Never write more than TWO files between announcements. Never run a schema
-migration, install a dependency, or edit `app.py` (or the framework's boot
-file) without a preceding `About to:` line.
-
-Stop-points that especially matter:
-
-- **Before the FIRST file write in a slice** — the developer sees the whole
-  intent before any bytes hit disk.
-- **Before a migration** — schema changes are hard to reverse.
-- **Before adding a dependency** — leaves a trace in the manifest and lockfile.
-- **Before generating scaffolding into more than 2 files** — the developer
-  might want a subset.
-- **Before running the full test suite** — it's slow; make sure it's the
-  right moment.
-
-This is the same rhythm across all four framework developer skills (Python /
-PHP / Ruby / Node), so a developer who switches languages recognises the
-pattern instantly.
+This is the same rhythm across all four framework developer skills (Python / PHP / Ruby / Node),
+so a developer who switches languages recognises the pattern instantly.
 
 ## Detect if you are stale — 💩
 
@@ -140,12 +184,12 @@ write-back. Cursor todos / chat checklists are **not** the plan.
 
 Complex apps fail in the seams BETWEEN features, not inside them. When `plan/` carries `journeys/` and `flows/` (the `tina4-architect` skill seeds them), that is the spec — honour it:
 
-- **Build in journey order.** One walkable journey end to end beats ten half-built screens. Every route, model, and template you add traces back to a journey step AND a flow node; if it traces to neither, it is not on the plan — stop and ask.
+- **Build in journey order.** One walkable journey end to end beats ten half-built screens. Every route, model, and template you add traces back to a journey step AND a flow node; if it traces to neither, it is not on the plan — add it to the plan (and to the journey it serves) and say so in one line, or leave it out.
 - **Walk the completeness net per feature** before you tick it: every screen state (empty / loading / error / permission-denied), every journey edge (abandon, refresh, double-submit, session expiry), authz on every route (not just login), validation + a migration (+ rollback), what the user sees when a dependency is down, the concurrency race, a safe production 500. Answer each or record "N/A because…" — silence is the bug this catches.
 - **Prove the journey, don't assume it.** A task is Done only when its journey steps are walked END TO END against real dependencies (no mocks), positive AND negative — that walk is the acceptance gate, on top of the per-feature tests.
 - **Mark it 🗺️.** When you map, update, or trace a journey or flow, begin the reply `🤖🗺️` so the developer can SEE the seams are being minded.
 
-No `plan/journeys/` on a complex build? That is the signal to bring in `tina4-architect` first — features invented without journeys are the exact gap this closes.
+No `plan/journeys/` on a complex build? That is the signal to bring in `tina4-architect` first — features invented without journeys are the exact gap this closes. Ask it to "map the journeys" (or to re-architect): that explicit request is how the architect re-enters a project that is already scaffolded.
 
 ### Reach for the right sibling skill
 
@@ -159,9 +203,15 @@ Scoping starts with knowing what DONE looks like. If the developer's instruction
 **outcome** - the observable end state that counts as success - INFER the most sensible one from the request,
 the codebase, and the project's conventions, write it as an **Outcome:** line at the top of the plan, and
 PROCEED. Do not stop to ask: a stated assumption the developer can correct beats a plan blocked waiting on a
-reply. Ask first ONLY when a wrong guess is expensive and hard to reverse.
+reply. Ask first ONLY when a wrong guess is expensive or hard to reverse:
 
-Ask one specific question and offer your best read as the default, so a quick "yes" moves the work:
+- a destructive migration or any change that deletes or rewrites data;
+- a choice between architectures that is costly to undo (which backend, monolith vs decoupled SPA,
+  a second service);
+- a public release;
+- an irreversible external action (sending email to real users, charging money, filing a public issue).
+
+Otherwise state your read in one line and keep going:
 
 > You asked for X. I am taking the outcome to be: <one-line observable end state>. I am proceeding on that
 > unless you redirect.
@@ -174,8 +224,11 @@ the developer can correct.
 ### 1. Keep the main session free — delegate to a worker
 When the developer gives an instruction, don't do the work inline. **Allocate it to a plan, then
 spawn a separate worker to execute it**, so the main session is always free for the next input.
-Tina4 **hot-reloads on save** (DevReload), so as the worker edits routes, models, and templates the
-developer watches the interface change **live in the browser** — keeping the main session open is
+Under `tina4 serve` the file watcher reloads on save: templates and static files refresh the browser,
+and an edited or NEW file under `src/` (routes, models) is re-imported through `POST /__dev/api/reload`
+with no restart. A bare `python app.py` has no watcher, so a route or model file added there needs a
+restart. The MCP `route_list` tool reads the live route registry, so it reflects a new file once the reload
+has run. As the worker edits, the developer watches the interface change **live in the browser** — keeping the main session open is
 what lets them observe and steer while the work happens. The main agent scopes, dispatches, and
 reports; workers build and update the plan. When a worker finishes an item, surface it to the
 developer. Whoever builds updates `plan/<feature>.md` in the **same turn** they claim progress:
@@ -189,10 +242,23 @@ plan** as new `[ ]` items. A genuinely new feature → **scope it and state the 
 create `plan/<feature>.md` and start. Additional features are never side-quests — they are just new
 checkboxes in a plan.
 
-### 3. The plan folder — a master plan over feature plans
-`plan/` holds a **master plan** (`plan/MASTER.md`) that carries the overview — every feature and its
-status at a glance — plus one detailed plan per feature. The master plan is the dashboard; each
-feature plan owns the detail:
+### Spec-first — acceptance criteria before code
+Before you write any code, fill the `## Spec` section of the work plan: the user goal, then the
+behaviour as numbered `AC-N` given/when/then lines, then the non-goals. Each `AC-N` is one claim a
+real test will make red or green — so the acceptance criteria ARE your test list (step 4), one test
+per criterion, positive and negative. Keep the spec current: when behaviour moves, change the `AC-N`
+first, then the code and its test. The spec is the source of truth; code that disagrees with it is
+the bug. This mirrors how the framework itself is built (Spec-Driven Development in `tina4-maintainer`)
+and carries down the journeys `tina4-architect` mapped.
+
+### 3. The plan folder — a master plan over work plans
+`plan/` holds a **master plan** (`plan/MASTER.md`) that carries the overview — every unit of work and
+its status at a glance — plus ONE work plan per unit of work at `plan/<name>.md`. The master plan is
+the dashboard; each work plan owns the detail. Project-level artefacts live in sub-folders of `plan/`
+and are linked from the plans that use them: `plan/journeys/`, `plan/flows/`, `plan/decisions/`
+(ADRs), and the records other skills write (for example `plan/seo/PRE-LAUNCH-CHECKLIST.md`).
+`TINA4.md` (the architecture record) stays at the project root, and the visual deliverables of
+`tina4-design` stay in `design/`; the plans link to both.
 
 ```markdown
 # Master Plan — <project>
@@ -219,19 +285,28 @@ matches the shape of the work. A tiny single-file demo may put the whole plan
 directly in `MASTER.md`. A multi-page app with a backend + frontend + workers:
 split by feature. A big feature inside a split project: split again.
 
-A feature plan has four parts — a Scope checklist, the Tests, a Bugs section, and a Commit log:
+A work plan has ONE format: Scope / Spec / Tests / Bugs / Commits / `## Status: In Progress|Complete`:
 
 ```markdown
 # Feature: Product Search API
+
+**Outcome:** a client can search products by name and price range, and an empty search is a clean [].
 
 ## Scope
 - [x] Product model (id, name, price, created_at)
 - [x] GET /api/products?q= — search by name
 - [ ] Price-range filter (?min= &max=)
 
-## Tests (written first, real — no mocks)
-- [x] search returns matching products   (real SQLite, seeded rows)
-- [ ] price-range filter narrows results
+## Spec — acceptance criteria (write these FIRST, before any code)
+- AC-1: given a product "Widget", when GET /api/products?q=wid, then it is in the results
+- AC-2: given no match, when GET /api/products?q=zzz, then the body is [] with status 200 (never 500)
+- AC-3: given ?min=5&max=20, when listing, then only products priced 5–20 come back
+- Non-goals: fuzzy/typo matching, relevance ranking
+
+## Tests (written first, real — no mocks) — ONE per acceptance criterion
+- [x] AC-1 search returns matching products   (real SQLite, seeded rows)
+- [ ] AC-2 empty result returns [] not 500
+- [ ] AC-3 price-range filter narrows results
 
 ## Bugs
 - [x] q= containing % broke the LIKE — escaped the wildcards (a1b2c3d)
@@ -285,8 +360,9 @@ nothing (see **No Code Without Tests** and **Testing** below). The passing real 
 definition of done for a checklist item.
 
 ### 5. Scaffold the boilerplate, then fill only the custom logic
-Only once the tests exist: **scaffold with `tina4 generate <feature>`** (model, route, crud, service,
-queue, validator, seeder, websocket, listener, form, view, auth) — the boilerplate is generated
+Only once the tests exist: **scaffold with `tina4 generate <what> <name>`** (model, route, crud,
+migration, middleware, test, base, page, form, view, auth, service, queue, validator, seeder,
+websocket, listener — `tina4 generate` with no arguments lists them) — the boilerplate is generated
 deterministically, correct and **secure-by-default** (write routes are token-gated; pass `--public`
 to open them) — then **fill ONLY the `# ─── AI-FILL ───` placeholder** it leaves. An unfilled one
 `raise`s `NotImplementedError`, so a stub can never ship silently. Each placeholder is a tight
@@ -297,12 +373,14 @@ instead. That is the token-efficient split the skills evaluation validated: the 
 *generated* (no stochastic model in that path), and the ~20% custom logic is where you write —
 grounded with `tina4_context`. Climb the reuse ladder for anything the scaffolder can't express.
 
-### 6. Verify for real, then tick and log — do not wait for per-item approval
+### 6. Verify for real, then tick and log — do not wait for approval
 Tick a Scope or Tests checkbox **as soon as you have verified it**: code works and its real tests
 pass on a real run. **Do not** leave boxes open waiting for the developer to approve each item —
-that is why plans stall. Developer approval is only required to **start** the plan and to set
-`## Status: Complete`. When an item lands, also append **commit hash + one-line description** under
-Commits in the same edit.
+that is why plans stall. There is no approval gate to start a plan or to close it: state the
+inferred outcome and start; set `## Status: Complete` on verified evidence (every Scope, Spec and
+Tests item green on a real run, the journey walked end to end). The developer can redirect at any
+time. When an item lands, also append **commit hash + one-line description** under Commits in the
+same edit.
 
 ### 7. Report as a ✅/❌ dashboard
 Report to the developer as a table, not prose:
@@ -328,7 +406,7 @@ Climb in order; write new code only at the last rung. Tina4 ships **140 cataloge
 
 1. **Does it need to exist?** Re-read the request and trace the actual code flow. The best change is often none.
 2. **Does Tina4 already do it?** Check built-ins first: CRUD → `auto_crud = True` (AutoCrud); DB → the ORM (`Model.all()/.where()`); Auth/JWT → `Auth`; validation → `Validator`; seed/fake data → `FakeData`/`seed_orm`; email → `Messenger`; queue → `Queue`; templates → Frond; sessions, i18n, WebSockets, GraphQL, realtime — all built in.
-3. **Can `tina4 generate` scaffold it?** Prefer the generator over hand-writing boilerplate: `tina4 generate <feature>` (model, route, crud, migration, service, queue, validator, seeder, websocket, listener, form, view, auth) emits correct, **secure-by-default** wiring (write routes token-gated; `--public` to open) and leaves an `# ─── AI-FILL ───` fill-spec placeholder — you fill only the custom logic. Keep the stochastic model out of the boilerplate path.
+3. **Can `tina4 generate` scaffold it?** Prefer the generator over hand-writing boilerplate: `tina4 generate <what> <name>` (model, route, crud, migration, middleware, test, base, page, form, view, auth, service, queue, validator, seeder, websocket, listener) emits correct, **secure-by-default** wiring (write routes token-gated; `--public` to open) and leaves an `# ─── AI-FILL ───` fill-spec placeholder — you fill only the custom logic. Keep the stochastic model out of the boilerplate path.
 4. **Does the Python stdlib do it?** (`datetime`, `json`, `hashlib`, `uuid`…) Use it before reaching further.
 5. **Is it already in THIS app?** Reuse the existing model/route/service — don't duplicate.
 6. **Adding a dependency? Stop.** Tina4 is zero-dependency — find the built-in.
@@ -359,13 +437,13 @@ whenever the dev server is running (`tina4 serve` with `TINA4_DEBUG=true`):
 
 - **`api_search("render template")`** — ranked search across framework + your own code; returns fqn, signature, file:line. Run it BEFORE assuming a method exists.
 - **`api_class("Frond")`** — every method on a class, with signatures. A bare name (`Frond`), an import path, or the full fqn all resolve.
-- **`api_method("Frond", "add_test")`** — exact signature, params, return type, file and line for one method.
+- **`api_method`** with arguments `class` and `name` (e.g. `class="Frond"`, `name="add_test"`) — exact signature, a structured `params` list (`name`, `type`, `required`, `default`), `return` type, file and line for one method. Omit an argument and it answers `missing required argument 'name' (api_method takes class, name)`.
 - **`code_search("where is the auth token issued?")`** — fuzzy/semantic full-text search over **THIS project's own source + docs** (the native `Context` FTS5 index — zero-dep, kept live on every file save). Ranks the file that *defines* a symbol above tests that merely mention it. The in-repo, semantic counterpart to `api_*`.
 
 ```
 api_search("queue consume")     -> finds Queue.consume and its signature
 api_class("Database")           -> every method on Database, with signatures
-api_method("Frond", "add_test") -> add_test(name, fn)
+api_method(class="Frond", name="add_test") -> add_test(name, fn)
 code_search("send an email")    -> the routes/services in YOUR app that already do it
 ```
 
@@ -386,7 +464,7 @@ the app.
 | # | Step | What you do | Gate before moving on |
 |---|------|-------------|-----------------------|
 | 1 | **Ground** | retrieve the current idiom — `tina4_context(request, "python")`, then `code_search`/`api_search` for this project | real imports + shape in hand |
-| 2 | **Scaffold** | `tina4 generate <feature>` for the boilerplate — secure-by-default | the ~80% is deterministic |
+| 2 | **Scaffold** | `tina4 generate <what> <name>` for the boilerplate — secure-by-default | the ~80% is deterministic |
 | 3 | **Write** | the custom ~20% only, using ONLY symbols the grounding showed | — |
 | 4 | **Validate** | check every symbol against the known vocabulary (`api_search` / the real framework exports) | are they all real? |
 | 5 | **Repair** | fix the deterministic-fixable — wrong module path, a decorator/helper used but not imported | — |
@@ -416,21 +494,25 @@ A Tina4 app is just a directory structure. No config files, no build steps:
 my-app/
 ├── app.py            # Entry point
 ├── .env              # Environment variables
+├── migrations/       # SQL migration files (project root, NOT under src/)
 ├── src/
 │   ├── routes/       # Drop route files here — auto-discovered
 │   ├── orm/          # Drop model files here — auto-registered
 │   ├── templates/    # Frond templates (Twig-like)
 │   ├── public/       # Static files (served directly)
-│   ├── migrations/   # SQL migration files
 │   └── seeds/        # Data seeders
 └── tests/            # Test files
 ```
 
 Start a project:
 ```bash
-tina4 init python my-app
+tina4 init python ./my-app
 cd my-app
 ```
+
+Pass a PATH (`./my-app`) to create the project in the current folder. A BARE name
+(`tina4 init python my-app`) is created in your configured projects folder when one is set (the CLI
+prints where), so `cd my-app` would fail; `tina4 serve my-app` resolves the name the same way.
 
 Run the dev server:
 ```bash
@@ -444,8 +526,9 @@ browser auto-open, and hot reload. Running `python app.py` directly skips all of
 The CLI passes `--managed` to the framework server. The framework refuses to start without it.
 To bypass (e.g. Docker, CI), set `TINA4_OVERRIDE_CLIENT=true` in `.env`.
 
-The framework-specific `tina4py` command is a fallback for low-level framework work. It is not
-the default project entry point.
+The framework-specific `tina4python` command (the `[project.scripts]` entry in tina4-python's
+`pyproject.toml`) is a fallback for low-level framework work. It is not the default project entry
+point: `tina4 <command>` forwards anything it does not own (migrate, generate, routes, test, ...) to it.
 
 That's it. You get SCSS compilation, hot reload, debug overlay, and Swagger docs at `/swagger`
 automatically.
@@ -466,8 +549,10 @@ so simple reads as intent: `# tina4: returns the first match; add pagination whe
 
 ## Two Ways to Build
 
-Tina4 supports two distinct architectural approaches. Ask the developer which one they want
-before writing code — it changes everything about how you structure the app.
+Tina4 supports two distinct architectural approaches. On an existing project, read the choice
+from the code (`TINA4.md`, app pages in `src/templates/` vs a separate frontend app) and follow it.
+On a new project with no signal, ask once before writing code: this choice is costly to undo, and
+it changes everything about how you structure the app.
 
 ### 1. Monolithic (Server-Rendered)
 
@@ -481,7 +566,8 @@ Browser ←→ Tina4 Routes ←→ Frond Templates ←→ Database
 - Routes return `response.render("page.twig", data)`
 - Templates handle all UI logic (loops, conditionals, includes, macros)
 - Live blocks (`{% live %}`) add real-time updates without a JS framework
-- frond.js provides lightweight DOM helpers, forms, modals, notifications
+- frond.js provides AJAX, form submit, fragment loading, WebSocket/SSE and message helpers
+- tina4-js islands add rich interactive parts to a Frond page where they are needed
 - Great for: admin panels, CMS, dashboards, content sites, internal tools
 
 This is the simpler path. If the developer doesn't need a reactive SPA, default to this.
@@ -578,22 +664,41 @@ for job in Queue(topic="order-created").consume():
 Always start simple and extract services when you have a real reason — not because
 microservices sound impressive. The best architecture is the one you don't over-engineer.
 
-### Pick One — Don't Mix
+### Frond pages, islands, or an SPA — the rule
 
-This is critical: **do not build the same UI in both Frond templates AND a reactive frontend.**
-That creates duplicate maintenance, conflicting state, and confusion about which layer owns the
-rendering. Once the developer picks an approach, stick to it:
+The same rule appears in every Tina4 skill:
 
-- **Chose monolithic?** → All UI lives in Frond templates. No React, no tina4-js components
-  duplicating what templates already do. frond.js is fine for lightweight DOM helpers.
-- **Chose API + reactive?** → Frond templates are NOT used for app UI. The backend only serves
-  JSON. All rendering happens in the frontend framework (tina4-js, React, etc.).
+- **Frond server-rendered pages are the default.**
+- **tina4-js "islands"** — components mounted into Frond-rendered pages — **are fine for the
+  interactive parts of a page** (a live search box, a cart, a chat window). The page stays a Frond
+  page; the island owns only its own tag.
+- **A full tina4-js SPA** (or React, Vue, ...) **is the choice when the frontend is decoupled from
+  the backend** — a separate app that talks to the API. Then Frond is not used for app UI; it can
+  still render non-app pages (error pages, email templates).
 
-The only acceptable overlap is using Frond for non-app pages (error pages, email templates,
-Swagger docs) while the main app uses a reactive frontend.
+How an island mounts and gets its data (the full example is in the `tina4-js` skill, "Islands
+Architecture"):
 
-**Before writing any UI code, ask:** "Are we doing server-rendered or client-rendered?" Then
-commit to that choice for the entire feature.
+- The Frond template renders the host tag and loads `/js/tina4js.min.js`, then the island script,
+  which calls `customElements.define(...)`.
+- Initial data goes in as attributes that Frond writes (auto-escaped):
+  `<add-to-cart product-id="{{ product.id }}"></add-to-cart>`. The island declares them in
+  `static props`.
+- More data comes from the tina4-js `api` client (same origin). It sends the bearer token only
+  after `api.configure({ auth: true })`, and reads it from `localStorage` (`tina4_token`).
+- With `TINA4_CSRF=true`, a write from an island with no bearer token must carry the form token:
+  render `{{ form_token_value() }}` into an attribute and post it as `formToken`. A valid bearer
+  token skips the CSRF check.
+
+The genuine technical limits — keep them:
+
+- **One owner per piece of DOM and state.** Never let Frond (a `{% live %}` block, frond.js
+  `inject`) and an island re-render the same element, and never keep the same state in a template
+  and an island signal. Do not build the same UI twice, once in Frond and once in tina4-js.
+- **Shadow DOM blocks page CSS.** `Tina4Element` uses Shadow DOM by default; set
+  `static shadow = false` so tina4-css reaches the island.
+- **One token owner per page.** frond.js keeps its token in memory (`frond.token`); the tina4-js
+  `api` client reads `localStorage`. They do not share it.
 
 ## The Golden Rules
 
@@ -626,13 +731,14 @@ When helping a developer build with Tina4 Python, always follow these:
 
 6. **Tina4CSS + frond.js are the default frontend stack** — For any server-rendered page, form,
    or AJAX interaction, use the framework's built-in **Tina4CSS** (a Bootstrap-compatible
-   drop-in, ships in `src/public/css/`) and **frond.js** (`/js/frond.js` — AJAX, forms, modals,
-   notifications, WebSocket reconnect). They are already installed: no CDN, no npm, no Bootstrap,
-   no jQuery, no Tailwind. Reach for them BY DEFAULT.
+   drop-in, ships in `src/public/css/`) and **frond.js** (`/js/frond.js` — AJAX, forms, fragment
+   loading, messages, WebSocket/SSE with reconnect). They are already installed: no CDN, no npm, no
+   Bootstrap, no jQuery, no Tailwind. Reach for them BY DEFAULT.
    - Layout / components: Tina4CSS classes (`container`, `row`, `col`, `card`, `btn`, `form-control`, `navbar`, the `mt-*`/`d-flex` utilities). Bootstrap muscle memory works.
-   - AJAX form POST: `saveForm("formId", "/endpoint", "messageId")` from frond.js — auto-collects inputs, handles the form token and file uploads.
-   - Load a partial: `loadPage("/route", "targetId")`. Low-level call: `sendRequest(url, data, method, cb)`.
-   - The reactive **tina4-js** frontend is the exception, not the rule — use it only for a decoupled SPA (see "Two Ways to Build"); for normal server-rendered apps, Tina4CSS + frond.js is the path.
+   - frond.js defines ONE global, `window.frond` (lower case). There is NO `Frond` global and NO `saveForm` / `loadPage` / `sendRequest`.
+   - AJAX form POST: `frond.form.submit("formId", "/endpoint", "messageId")` — collects every input (files and checkboxes too) into FormData, sends the rendered `formToken` field as is, and injects the response into `#messageId`. Ids are passed without `#`.
+   - Load a partial: `frond.load("/route", "targetId")`. Low-level call: `frond.request(url, { method, body, onSuccess, onError })` (callback style; an object body is sent as JSON).
+   - For a rich interactive part of a page, a **tina4-js island** is fine (see "Frond pages, islands, or an SPA"). A full tina4-js SPA is for a decoupled frontend.
 
 7. **Render a template with `response.render(name, data)` — there is NO `template()` function.**
    This is the #1 hallucination: AI writes `response.html(template("login.twig"))` and gets
@@ -647,13 +753,13 @@ When helping a developer build with Tina4 Python, always follow these:
    html = Frond(template_dir="src/templates").render("login.twig", data)
    ```
 
-   **A template global registered with `add_global(name, value)` stores your
-   value as-is — pass a VALUE, not a lazy callable.** A function or lambda is
-   stored uncalled, so when you name it bare in a condition it is a truthy
-   object: `{% if flag %}` is ALWAYS true when `flag` is a lambda, even one that
-   returns `False` (only `{% if flag() %}` calls it). Resolve it to a real bool
-   before you pass it, or call it in the template. Full note + the
-   register-the-global-the-way-the-app-does test trap in
+   **Register template globals on the class, at boot: `Frond.add_global(name, value)`.**
+   An instance call (`Frond(...).add_global(...)`) only changes that one engine, so a
+   throwaway instance never reaches `response.render`. A zero-argument function or
+   lambda is auto-called on a bare reference (ADR-0085): `{% if flag %}` uses its return
+   value, and `{% if flag() %}` also works. A callable that takes parameters is stored
+   as-is, so name it bare and it is a truthy function object; call it with its
+   arguments. Full note + the register-the-global-the-way-the-app-does test trap in
    `references/templates-and-frontend.md`.
 
 8. **Use the built-in `Api` client for ALL outbound HTTP — never a raw HTTP library.** Every call
@@ -721,9 +827,11 @@ async def create_order(request, response):
 > `User.find({"email": ...})[0]` — **not** `select_one("email = ?", ...)` (which needs full
 > `SELECT ...` SQL) and **not** `find("email = ?")` (a string is read as a primary-key value).
 
-**The client carries the token for you.** frond.js sends the current `Authorization: Bearer` on
-every `saveForm`/`sendRequest`; the tina4-js `api` client and the backend `Api` client
-(`bearer_token`) do too. Raw / `curl` clients set the header themselves. Browser forms also get
+**The client carries the token for you.** Once it has a token (set `frond.token = jwt`, or it
+picks up a `FreshToken` response header), frond.js sends `Authorization: Bearer` on every
+`frond.request` / `frond.load` / `frond.post` / `frond.form.submit` to your own origin, never to
+another origin. The tina4-js `api` client (after `api.configure({ auth: true })`) and the backend
+`Api` client (`bearer_token`) do too. Raw / `curl` clients set the header themselves. Browser forms also get
 CSRF protection from `{{ form_token() }}`.
 
 **Protect a GET route** (public by default) with `@secured()`. **Role / admin checks** go in a
@@ -778,8 +886,10 @@ YOUR app, not just the framework, on every change - never saved for a "cleanup p
 
 - **`tina4 metrics` is a GATE, not a dashboard.** It scans your source directly (native,
   language-agnostic) and ranks the worst offenders by cyclomatic complexity, maintainability
-  index, and duplication. Wire `tina4 metrics --fail-on warn` into CI so a NEW offender fails the
-  build like a failing test. Before you add to a file, run `tina4 metrics --path <file>` first: if
+  index, and duplication. Commit a clean `.tina4-metrics.json` baseline and wire
+  `tina4 metrics --fail-on-regression` into CI, so the build fails only when the code gets measurably
+  worse (a new offender file, more offenders, worse complexity, more duplication). Do NOT gate on
+  `--fail-on warn`: it fails on ANY offender at or above warn, including old ones nobody touched. Before you add to a file, run `tina4 metrics --path <file>` first: if
   it is already an offender, split it before you make it worse. `--top N` / `--json` scope the
   report; `tina4 update` keeps the binary current.
 - **Carbonah before AND after any hot path.** For a change to rendering, serialisation, a query,
@@ -842,18 +952,27 @@ firebird://user:password@localhost:3050/mydb
 mongodb://user:password@localhost:27017/mydb
 ```
 
-> For SQLite, use `sqlite:data/app.db` (scheme-only) or `sqlite:///data/app.db` (three slashes).
-> Do NOT use `sqlite://data/app.db` (two slashes) — the path segment is parsed as a host and
-> dropped.
+> SQLite URL forms (from `database/connection.py`), relative paths resolve from the working directory:
+>
+> | URL | Path used |
+> |---|---|
+> | `sqlite:data/app.db` | `data/app.db` (relative) |
+> | `sqlite:///data/app.db` | `data/app.db` (three slashes = relative) |
+> | `sqlite://data/app.db` | `data/app.db` (two slashes, legacy = relative) |
+> | `sqlite:/abs/app.db` | `/abs/app.db` (one slash = absolute) |
+> | `sqlite:////abs/app.db` | `/abs/app.db` (four slashes = absolute) |
+> | `sqlite:///C:/Users/x/app.db` | `C:/Users/x/app.db` (Windows absolute) |
+>
+> Prefer `sqlite:///data/app.db` for a relative file and `sqlite:////abs/path.db` for an absolute one.
 
 ## Testing
 
-> **SQLite URL footgun — mind the slashes.** Bind a **relative** sqlite URL for test / temp
-> databases: `sqlite:///data/test.db` (three slashes = relative to cwd — identical on every
-> backend). Never build the URL from a raw absolute path (e.g. `"sqlite:" + abs_path`, which
-> yields a single leading slash) — python/ruby read that as *relative*, so the DB is silently
-> created somewhere else and a test's DB-reset misses it (stale rows → flaky assertions). For a
-> genuine absolute path use the four-slash form `sqlite:////abs/path.db`.
+> **SQLite URL — mind the slashes.** For test / temp databases bind a **relative** URL:
+> `sqlite:///data/test.db` (three slashes = relative to the working directory). For a genuine
+> absolute path use the four-slash form `sqlite:////abs/path.db`. One slash (`"sqlite:" + abs_path`)
+> is also read as absolute on current tina4-python, but older releases read it as relative, so the
+> test DB landed somewhere else and the test's DB reset missed it (stale rows, flaky assertions).
+> Use the explicit four-slash form and the result is the same on every version.
 
 Tests are written alongside the code:
 
@@ -954,21 +1073,25 @@ The base image ships with **SQLite only**. To add PostgreSQL, MySQL, MSSQL, or F
 ### CLI Deploy
 
 ```bash
-tina4py build                              # Build Docker image
-# `stage` and `deploy promote` are Rust `tina4` CLI verbs (external), not
-# `tina4py` — `tina4py deploy <target>` accepts docker / systemd / nginx / cpanel
-# and stops there. For staging-and-promote flows, use the external `tina4`
-# client directly.
+tina4 deploy docker                        # write the Dockerfile + .dockerignore (also: systemd, nginx, cpanel; --force overwrites)
+tina4python build --tag my-app             # build the deployable Docker image (framework CLI)
 ```
+
+`tina4 build` (the Rust client's own command) is different: it compiles and minifies SCSS for
+production. Neither CLI has a `stage` or `deploy promote` command; promote images through your
+pipeline (for Kubernetes, see the `tina4-k8s` skill).
 
 The app includes a health check at `/health` that Kubernetes probes can use.
 
 ## Plan First — Always
 
-**One format only:** Scope / Tests / Bugs / Commits / Status. Never use Criteria / Approach —
-those headings are obsolete and cause agents to ignore half the plan.
+**One format only:** Scope / Spec (acceptance criteria) / Tests / Bugs / Commits /
+`## Status: In Progress|Complete`. Never use Criteria / Approach — those headings are obsolete and
+cause agents to ignore half the plan.
 
-Every feature starts with `plan/<feature-name>.md` (and a row in `plan/MASTER.md`). No exceptions.
+Every unit of work starts with `plan/<name>.md` (and a row in `plan/MASTER.md`). No exceptions.
+Journeys, flows, decisions and other project-level records live in sub-folders of `plan/` and are
+linked from the work plan.
 
 **Plan-first is a HARD rule, not a convention.** Coding-agent shells that host
 this skill (e.g. `tina4-simple-agent`) enforce it at the tool layer: any
@@ -988,10 +1111,10 @@ statement as a Scope item.** Translate it first:
 
 1. **Embellish with Tina4 principles** — restate the ask through the reuse ladder, convention
    over configuration, secure-by-default (writes need Bearer — don't reach for `@noauth()`),
-   scaffold-then-fill (`tina4 generate`), real tests, Tina4CSS + frond.js (or API + tina4-js),
+   scaffold-then-fill (`tina4 generate`), real tests, Tina4CSS + frond.js (plus tina4-js islands where a page needs them, or API + a tina4-js SPA),
    zero pip deps. Example: "add auth" → "public `POST /api/login` mints JWT via
    `Auth.get_token` / `Auth.check_password`; write routes stay Bearer-protected by default;
-   login page uses Frond in `src/templates/` + `saveForm`; real pytest for success/401."
+   login page uses Frond in `src/templates/` + `frond.form.submit`; real pytest for success/401."
 2. **Split into small shippable chunks** — each Scope checkbox is one deliverable a junior can
    finish in ~1–2 hours (one model, one route, one template, one real test). If a checkbox needs
    the word "and" thrice, split it.
@@ -1014,17 +1137,26 @@ Good:
 ```markdown
 # Feature: User Authentication
 
+**Outcome:** a user can log in with email and password and only then write data.
+
 ## Scope
 - [ ] Login page with email/password
 - [ ] JWT token issued on successful login
 - [ ] Protected write routes return 401 without a valid token
 - [ ] Logout clears the session
 
-## Tests (written first, real — no mocks)
-- [ ] login success (real DB / real request)
-- [ ] login failure returns 401
-- [ ] protected route rejects missing token
-- [ ] token expiry rejects stale tokens
+## Spec — acceptance criteria
+- AC-1: given a valid user, when POST /api/login with the right password, then 200 and a token
+- AC-2: given a wrong password, when POST /api/login, then 401 and no token
+- AC-3: given no token, when POST /api/orders, then 401
+- AC-4: given an expired token, when POST /api/orders, then 401
+- Non-goals: SSO, password reset
+
+## Tests (written first, real — no mocks) — ONE per acceptance criterion
+- [ ] AC-1 login success (real DB / real request)
+- [ ] AC-2 login failure returns 401
+- [ ] AC-3 protected route rejects missing token
+- [ ] AC-4 token expiry rejects stale tokens
 
 ## Bugs
 - (none yet)
@@ -1035,8 +1167,9 @@ Good:
 ## Status: In Progress
 ```
 
-Show the plan before coding so the developer can adjust scope. If they say "just build it," still
-create the plan file, then build against it — never skip the file.
+Write the plan file, state the outcome and the slice in one line, and start building. The
+developer can adjust scope at any time. Even when they say "just build it," create the plan file
+first and build against it — never skip the file.
 
 ### Working the Plan — non-negotiable
 
@@ -1058,21 +1191,23 @@ create the plan file, then build against it — never skip the file.
 | Level | When to mark | Who |
 |-------|----------------|-----|
 | Scope / Tests / Bugs `[x]` | Code works + real tests green on a real run | Agent / worker (immediately) |
-| `## Status: Complete` | All Scope + Tests checked, developer confirms the feature | After developer confirmation |
+| `## Status: Complete` | All Scope, Spec and Tests items verified on a real run (journey walked end to end) | Agent / worker, on that evidence |
 
 ### Closing the Plan
 
-When every Scope and Tests item is `[x]` and the developer confirms, set
-`## Status: Complete` with the date. Update `plan/MASTER.md` to match.
+When every Scope and Tests item is `[x]` on verified evidence (real tests green, every `AC-N`
+covered, the journey walked end to end), set `## Status: Complete` with the date. No approval
+gate: the evidence closes the plan. Update `plan/MASTER.md` to match.
 
 ## Before Building Any Feature
 
-1. **Open or create the plan** — `plan/<feature-name>.md` in Scope / Tests / Bugs / Commits form.
+1. **Open or create the plan** — `plan/<name>.md` in Scope / Spec / Tests / Bugs / Commits / Status form.
    If the ask is broad, embellish with Tina4 principles and split into small Scope items first.
-2. **"Server-rendered or client-rendered?"** — Ask for any UI work. Check the project for clues
-   (`src/templates/` with app pages vs a JS app in `src/public/`). If unclear, ask.
-3. **Stay in lane** — Server-rendered → Frond. Client-rendered → API + frontend. Never mix in one
-   feature.
+2. **"Server-rendered or a decoupled frontend?"** — Read it from the project (`TINA4.md`,
+   `src/templates/` with app pages vs a separate frontend app). Ask only on a new project with no
+   signal — that choice is costly to undo.
+3. **Stay in lane** — Server-rendered → Frond pages, with tina4-js islands for the interactive
+   parts where needed. Decoupled → API + frontend app. One owner per piece of DOM and state.
 4. **Check what exists** — Don't invent a pattern that contradicts the project.
 5. **Work the plan file** — Tick as items verify; uncheck if they regress; never leave the file
    stale while chat claims progress.
@@ -1089,7 +1224,7 @@ against Tina4 paradigms. This is not optional — bad code doesn't get a pass be
 - No inline styles — CSS classes only (Tina4CSS preferred)
 - Convention followed — files in the right directories
 - No third-party deps where Tina4 provides the feature
-- No mixing server-rendered and client-rendered in the same feature
+- One owner per piece of DOM and state — Frond and an island never render the same element, and no UI is built twice
 - Proper error handling — meaningful messages, not silent failures
 - Security — parameterized queries, escaped output, CSRF tokens on forms
 - Code is readable by humans AND AI — no clever tricks, no magic
@@ -1135,7 +1270,7 @@ A feature without tests is not a feature — it's a liability.
 
 Before any deployment (staging or production), run the Carbonah tool:
 
-1. **Code correctness check** — does it pass all tests, lint clean, no deprecation warnings?
+1. **Code correctness check** — does it pass all tests, lint clean, no deprecation warnings? For a security pre-check, run `tina4 codeql` in the project before you push: it runs the same CodeQL scan (the security-extended suite) GitHub does, locally, over your JS/TS/Python/Ruby code and Actions, and exits non-zero on any finding (`tina4 install codeql` sets it up).
 2. **CO2 emissions benchmark** — measure energy per request, compare against previous baseline
 3. **Only deploy if both pass** — a regression in correctness OR carbon efficiency blocks deployment
 
@@ -1151,8 +1286,10 @@ No shortcuts. No "we'll check it later." The check happens before the deploy, ev
 ### Monitor the Metrics Dashboard
 
 > **CLI:** run **`tina4 metrics`** for a code-health report in the terminal — the top complexity
-> offenders — with `--top N`, `--json`, `--path DIR`, and `--fail-on warn|error` (use the last to
-> fail a commit or CI on a complexity regression). Keep the `tina4` binary itself current with
+> offenders — with `--top N`, `--json`, `--path DIR`, `--suggest`, and two gates:
+> `--fail-on-regression` (fails only when the scan is worse than the committed
+> `.tina4-metrics.json` baseline — use this one in CI) and `--fail-on warn|error` (fails on ANY
+> offender at that severity, old or new). Keep the `tina4` binary itself current with
 > **`tina4 update`** (self-updates to the latest release).
 
 The Tina4 Dev Admin panel (`/__dev/` → Metrics tab) provides a **live code health visualization**
@@ -1202,6 +1339,13 @@ against assumptions about another engine's compatibility.
   and subscript access (`{{ items[loop.index0 % 3] }}`) work as documented.
 - If a documented Frond feature misbehaves, that's a **framework bug** — report it (see below).
 
+### Mobile-first layout
+
+Build the smallest screen first, then enhance upward with `min-width` media queries - the base
+styles ARE the mobile styles, never a desktop layout patched down with `max-width`. Keep every
+interactive control at least 44x44px. Map tokens onto tina4-css; the `tina4-design` skill owns the
+full token + breakpoint detail. This is the default stance for any view you write.
+
 ### Web Push (Feature 140)
 
 Use `references/web-push.md` for the provider-neutral Web Push contract. Treat it as a standalone outbound integration, not WebSocket or Server-Sent Events. Keep it configuration-first, fail loudly on partial VAPID configuration, and install the optional `tina4-python[push]` capability only when the project enables it.
@@ -1214,7 +1358,7 @@ When helping developers:
 - **Mention alternatives** — If there's a simpler approach, say so
 - **Don't over-engineer** — A developer asking for a login page doesn't need a full RBAC system
 - **Terse output, depth-scaled reasoning.** Default to the shortest output that conveys the result - a status line, a bullet, or a table. No preamble, no restating the task, no thinking-out-loud. Ask short questions. Elaborate ONLY when the user asks for more. Scale reasoning DEPTH (not word count) with difficulty: a hard call earns more STEPS in compact form (`claim -> check -> decision`, a decision tree, a checklist), an easy one gets a single line. This applies to replies, to questions, AND to the private thinking process - dense structure, minimal language. Verbosity costs the user time and tokens.
-- **Hard cap on length; chat, do not narrate.** Lead with the result in 3 lines or fewer - a status line or short table, not an essay. Do NOT echo the request back ("since you asked for X"), do NOT pad with reassurances ("I'll make sure it stays clean and simple"), do NOT stack "I'll ..." lines. Say the one concrete next action in a few words, or just do it. Skip internal bookkeeping the developer cannot act on ("logging the issue", "planning a fix", "double-checking it works"): do it silently. In a sequence, do not prefix each step with "Now:" or "About to:" - the file and command cards already show each action; announce the plan once, then just work. Reasoning goes after the result, only when the call is non-obvious.
+- **Hard cap on length; chat, do not narrate.** Lead with the result in 3 lines or fewer - a status line or short table, not an essay. Do NOT echo the request back ("since you asked for X"), do NOT pad with reassurances ("I'll make sure it stays clean and simple"), do NOT stack "I'll ..." lines. Say the one concrete next action in a few words, or just do it. Skip internal bookkeeping the developer cannot act on ("logging the issue", "planning a fix", "double-checking it works"): do it silently. In a sequence, do not prefix each step with "Now:" or "About to:" - the file and command cards already show each action; announce the plan once, then just work, and announce again only before a destructive or multi-file step (see "Announce before you act"). Reasoning goes after the result, only when the call is non-obvious.
 
 - **Objective on ideas; disagree when the design is weak.** Judge an approach on its merits against Tina4's grain: is there a simpler framework-native way, does it fight a convention, does it earn its complexity, does it break zero-dependency, parity, or security. When it is weak, say so and give the better option ("I would not do it that way, because ..."). A good idea gets the specific reason it is good, never a reflexive "great idea". Free praise is worthless: the developer cannot tell it from the real thing.
 - **Claim only what you verified; no performed virtue.** "We can't deploy", "the server is broken", "that won't work" are claims. Reproduce them (run it, read the actual error) before you say them, or say what you did and did not check. Never assert something about the model, tools, or setup you cannot show. Drop the honesty preambles too ("let me be honest", "to be objective", "not padding"): a plain statement carries more weight than a label announcing it.
@@ -1224,7 +1368,7 @@ The four rules below own how a reply reads. They win over any other tone guidanc
 - **Write plain English for a global team.** Most Tina4 engineers do not speak English first. Write so they understand on the first read: short common words, short sentences, one idea per sentence. No idioms, no slang, no metaphors. Spell out an acronym the first time you use it. Say the plain word, not the clever one.
 - **Keep it short.** Give the answer or the code first, then stop. Stay under about 150 words unless a document, report, or walkthrough was asked for. Use bullets. Skip the preamble, the recap, and the "I'll now ..." lines.
 - **Match the effort to the task.** Take the first rung of the reuse ladder that holds. Do not build more than was asked - a health route is a health route, not a health subsystem. A small task gets a small answer and a short thought; do not over-think it.
-- **Ask before you guess - but only when you are blocked.** Default: decide from the code, the conventions, and these skills, and keep working. When the choice is genuinely the owner's (which backend, which trade-off, a breaking change), ask at most 3 questions as short pick-one options BEFORE writing code or text. Never a wall of questions, and never after you have already guessed.
+- **State the outcome and start; ask only when a wrong guess is expensive.** Default: decide from the code, the conventions, and these skills, say what you decided in one line, and keep working. Ask FIRST only when a wrong guess is expensive or hard to reverse: a destructive migration, a choice between architectures that is costly to undo (which backend, monolith vs decoupled SPA), a public release, or an irreversible external action. Then ask at most 3 questions as short pick-one options BEFORE writing code or text. Never a wall of questions, and never after you have already guessed.
 - **Short means a short reply, not less rigor.** Still look up the API before you answer (`api_search` / `api_method`, or the `references/` files) - brevity is about the words, not the checking.
 
 ## Commit authorship — Tina4 co-authors what it helped build

@@ -4,12 +4,13 @@
 
 ## Plan structure
 
-Create `plan/design/PLAN.md` in the project. If `plan/` doesn't exist, create it.
+Create the work plan `plan/design.md` in the project. If `plan/` doesn't exist, create it. This follows the Tina4 plan layout used by every skill: one work plan per unit of work at `plan/<name>.md` with Scope / Spec / Tests / Bugs / Commits / `## Status: In Progress|Complete`; supporting records live in sub-folders of `plan/` and are linked from the plan.
 
 ```markdown
 # Design Plan — [Project Name]
 
 **Outcome:** A complete visual identity and UI system recorded in design/DESIGN.md and shipped as design/brand-guidelines.html and design/ui-guide.html.
+Deliverables: [DESIGN.md](../design/DESIGN.md) · [brand-guidelines.html](../design/brand-guidelines.html) · [ui-guide.html](../design/ui-guide.html)
 
 ## Scope
 - [ ] Phase 1: Intake complete — logo, name, about us, industry, project outline gathered
@@ -20,13 +21,26 @@ Create `plan/design/PLAN.md` in the project. If `plan/` doesn't exist, create it
 - [ ] Phase 6: DESIGN.md finalised; both files verified open correctly in browser
 - [ ] Phase 7: website.html built and saved to design/ (optional — skip if not requested)
 
+## Spec — acceptance criteria
+- AC-1: every text/background contrast pair in DESIGN.md is computed and meets WCAG AA (4.5:1 body text, 3:1 large text and UI)
+- AC-2: brand-guidelines.html and ui-guide.html open in a browser with no console errors, and the theme toggle switches light/dark
+- AC-3: every interactive component in ui-guide.html shows a visible focus ring and a 44×44px minimum touch target
+- AC-4: every token in DESIGN.md is used by the guides, and the guides use no colour that is not a token
+- Non-goals: production app code (the developer skill builds it from these tokens)
+
+## Tests — ONE check per acceptance criterion, run for real
+- [ ] AC-1 contrast ratios computed and recorded in DESIGN.md
+- [ ] AC-2 both files opened in a real browser, console clean, theme toggle works
+- [ ] AC-3 keyboard walk through ui-guide.html — focus visible on every control; target sizes checked
+- [ ] AC-4 guides searched for hard-coded colours outside the token block
+
 ## Bugs
 (none yet)
 
 ## Commits
 (none yet)
 
-## Status: Not Started
+## Status: In Progress
 ```
 
 ---
@@ -210,7 +224,7 @@ lg: [value]
 
 ## Next Steps
 - SEO/AISO implementation: run tina4-seo (reads this file as its source of truth)
-- WCAG 2.1 AA audit: use website-accessibility-prompt in plan/
+- WCAG 2.1 AA audit: run tina4-a11y (reads this file as its source of truth)
 - Developer implementation: read design/ui-guide.html and design/brand-guidelines.html as the spec
 
 ## Rationale log

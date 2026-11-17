@@ -18,10 +18,8 @@ If present, extract:
 ### 1.2 Read existing templates and stylesheets
 
 Find the base template layer:
-- **PHP:** `src/templates/`
-- **Python:** `src/templates/`
-- **Ruby:** `lib/tina4/public/` or `src/templates/`
-- **Node:** `src/templates/` or `views/`
+- **Tina4 (PHP, Python, Ruby, Node):** `src/templates/`, with the shared `<head>` and page shell in
+  `src/templates/base.twig` (created by `tina4 generate base`; pages extend it)
 - **Plain HTML:** the shared `<head>` include or index.html
 
 And the stylesheets:

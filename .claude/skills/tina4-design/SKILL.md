@@ -47,7 +47,7 @@ Read top to bottom once, then jump by section. Orientation and the phase order l
 - Required elements - Incremental build order - Quality checklist
 
 **Templates and guards** (`references/design-record-templates.md`)
-- Plan structure (`plan/design/PLAN.md`) - `DESIGN.md` template
+- Plan structure (`plan/design.md`) - `DESIGN.md` template
 - Avoid these defaults - Handoff note to tina4-developer
 
 **Reference files** (all in `references/`, one level deep)
@@ -226,7 +226,7 @@ design/
 
 **`design/DESIGN.md` is the canonical path.** Downstream skills — tina4-seo and the tina4-developer-* skills — read `design/DESIGN.md` as their source of truth. If a logo file is supplied, keep it in `design/` too (or the project's asset folder) and reference it with a path relative to the deliverable, e.g. `<img src="logo.svg">` when the logo sits beside the HTML in `design/`.
 
-The **plan** file is the one exception — it stays at `plan/design/PLAN.md`, following the universal Tina4 plan-folder convention. Plans live in `plan/`; deliverables live in `design/`.
+The **plan** file is the one exception — it is the work plan `plan/design.md`, following the universal Tina4 plan layout (one work plan per unit of work at `plan/<name>.md`). Plans live in `plan/`; deliverables live in `design/`, and the plan links to them.
 
 ---
 

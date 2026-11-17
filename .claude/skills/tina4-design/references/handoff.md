@@ -7,7 +7,7 @@
 When both deliverables are built:
 
 1. Finalise `DESIGN.md` — fill any sections left as placeholders, complete the rationale log
-2. Update `plan/design/PLAN.md` — tick all phases `[x]`, add commit or save entries under Commits, set `## Status: Complete`
+2. Update `plan/design.md` — tick all phases and acceptance-criteria tests `[x]` on verified evidence, add commit or save entries under Commits, set `## Status: Complete`
 3. Verify both files open correctly in a browser — confirm the theme toggle works, all components are interactive, the logo loads
 4. **Favicon brief check** — confirm `DESIGN.md` has a complete `## Favicon Brief` section:
    - Icon mark described (or "none — designer to supply" noted)
@@ -15,7 +15,7 @@ When both deliverables are built:
    - App name recorded
    - Square-safe mark availability noted
    - RFG package status: `pending` (tina4-seo generates the actual package — this skill's responsibility ends at the brief)
-5. **Design-level SEO and accessibility readiness check.** These are design decisions — the items below confirm the design system is ready for a developer to implement correctly. The code-level audits are handled by tina4-seo and the accessibility prompt after implementation.
+5. **Design-level SEO and accessibility readiness check.** These are design decisions — the items below confirm the design system is ready for a developer to implement correctly. The code-level audits are handled by the tina4-seo and tina4-a11y skills after implementation.
 
    **Accessibility (design decisions):**
    - [ ] `--focus-ring` token defined and used on every interactive component in ui-guide
@@ -33,7 +33,7 @@ When both deliverables are built:
 
    **Handoff pointers (record in DESIGN.md under `## Next Steps`):**
    - SEO/AISO implementation → run **tina4-seo** (reads this DESIGN.md as its source of truth)
-   - WCAG 2.1 AA accessibility audit → use the **website-accessibility-prompt** in `plan/`
+   - WCAG 2.1 AA accessibility audit → run the **tina4-a11y** skill (reads this DESIGN.md as its source of truth)
 
 6. Report to the user with a ✅/❌ dashboard per deliverable
 

@@ -102,10 +102,10 @@ Screen reader (NVDA):     ✅ page load + form + modal announced correctly
 
 ### Files changed
 [List every file that was created or modified]
-- src/templates/main.html — lang, skip link, landmarks, aria-current
-- src/templates/checkout.html — form labels, aria-describedby errors
-- public/css/app.css — focus-visible pattern, prefers-reduced-motion tokens
-- public/js/modal.js — replaced manual trap with <dialog>.showModal()
+- src/templates/base.twig — lang, skip link, landmarks, aria-current
+- src/templates/pages/checkout.twig — form labels, aria-describedby errors
+- src/public/css/app.css — focus-visible pattern, prefers-reduced-motion tokens
+- src/public/js/modal.js — replaced manual trap with <dialog>.showModal()
 - DESIGN.md — WCAG section appended
 ```
 
@@ -147,7 +147,7 @@ NVDA / VoiceOver walkthroughs completed on [pages listed]
 
 ## Plan structure
 
-Create `plan/a11y/PLAN.md` in the project:
+Create the work plan `plan/a11y.md` in the project. This follows the Tina4 plan layout used by every skill: one work plan per unit of work at `plan/<name>.md` with Scope / Spec / Tests / Bugs / Commits / `## Status: In Progress|Complete`; supporting records live in sub-folders of `plan/` and are linked from the plan.
 
 ```markdown
 # Accessibility Plan — [Project Name]
@@ -178,13 +178,30 @@ Every finding fixed and verified via manual walkthrough + automated tools.
 - [ ] Phase 19: High contrast mode (OPTIONAL)
 - [ ] Phase 20: Validation and handoff — walkthroughs + report
 
+## Spec — acceptance criteria
+- AC-1: every page in scope can be used end to end with the keyboard alone, with a visible focus indicator at every stop
+- AC-2: axe DevTools / Pa11y report 0 critical and 0 serious issues on every page in scope
+- AC-3: every text and UI contrast pair meets WCAG AA (4.5:1 text, 3:1 large text and UI components)
+- AC-4: every form field has a programmatic label, and errors are announced (aria-describedby / live region)
+- AC-5: content reflows at 320px CSS width and 400% zoom without horizontal scroll or loss of function
+- AC-6: a screen reader (NVDA or VoiceOver) announces page load, forms and dialogs correctly
+- Non-goals: <pages or WCAG AAA criteria explicitly out of scope>
+
+## Tests — ONE manual or automated check per acceptance criterion
+- [ ] AC-1 keyboard-only walkthrough of each journey
+- [ ] AC-2 automated tools run on every page in scope
+- [ ] AC-3 contrast pairs computed
+- [ ] AC-4 forms checked with a screen reader and the accessibility tree
+- [ ] AC-5 zoom and 320px reflow checked
+- [ ] AC-6 screen reader walkthrough
+
 ## Bugs
 (none yet)
 
 ## Commits
 (none yet)
 
-## Status: Not Started
+## Status: In Progress
 ```
 
 ---

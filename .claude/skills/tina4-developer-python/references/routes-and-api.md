@@ -184,11 +184,27 @@ CSRF (origin) and `@noauth` (identity) are orthogonal:
 - **Webhook / server-to-server** (no browser, no form): `@noauth()` + `@no_csrf()` to opt out of the
   form-token check. `@no_csrf()` is imported from `tina4_python.core.router`.
 
-frond.js attaches the token automatically on `saveForm` / `sendRequest`.
+frond.js (`window.frond`) sends the bearer token as an `Authorization` header on every
+`frond.request` / `frond.load` / `frond.post` / `frond.form.submit` to your own origin, once it has
+one (`frond.token = jwt`, or a `FreshToken` response header). `frond.form.submit` sends the rendered
+`formToken` field as is. A valid bearer token also skips the CSRF check.
 
 ## CORS
 
-Built-in. Configure in `.env` or it defaults to allowing all origins in development.
+Built-in, and **deny by default** (ADR-0018). With `TINA4_CORS_ORIGINS` unset, the server sends
+no `Access-Control-Allow-Origin` header, so the browser blocks every cross-origin call, in
+development too. A same-origin frontend (Frond pages, islands, a SPA served by the same app) needs
+nothing. A frontend on another origin (a separate dev server, another domain) needs the origin
+listed in `.env`:
+
+```env
+TINA4_CORS_ORIGINS=http://localhost:5173,https://app.example.com
+TINA4_CORS_CREDENTIALS=true      # only if the browser sends cookies; never together with *
+```
+
+`*` works but must be asked for, and it cannot be combined with credentials (the framework drops
+credentials and warns). The other keys are `TINA4_CORS_METHODS`, `TINA4_CORS_HEADERS` and
+`TINA4_CORS_MAX_AGE`. A rejected origin is logged once, naming the variable to set.
 
 ## Rate Limiting
 
