@@ -54,7 +54,7 @@ Read top to bottom once, then jump by section. Orientation and the phase order l
 - Phase 8.5 validation - Phase 9 handoff report - Phase 9.5 pre-launch checklist
 
 **Templates and guards** (`references/templates-and-guards.md`)
-- DESIGN.md SEO section - plan structure (`plan/seo/PLAN.md`) - relationship to other tina4 skills - avoid-list
+- DESIGN.md SEO section - plan structure (`plan/seo.md`) - relationship to other tina4 skills - avoid-list
 
 **Reference files** (all in `references/`, one level deep)
 - `discovery-audit.md` - Phase 1
@@ -97,7 +97,7 @@ breaking what must not break. Three tiers:
 - 🎚️ **Default with a reason - follow unless this project genuinely differs.**
   The nine-phase order; reading `design/DESIGN.md` first as the source of truth; the deliverable
   set (structured data in the base template, AI discovery files at the webroot, corrected
-  robots.txt + sitemap.xml, dynamic meta tags, favicon package, `plan/seo/PLAN.md`); the
+  robots.txt + sitemap.xml, dynamic meta tags, favicon package, `plan/seo.md`); the
   title/description length rules (50–60 char title, 120–160 char description); the avoid-list in
   `references/templates-and-guards.md`. Depart deliberately, name the project-specific reason, and
   record it — not by drift.
@@ -195,4 +195,4 @@ Nine phases in order. Each phase has a defined output. Read `design/DESIGN.md` f
 
 **Phases 8.5 / 9 / 9.5 - Validation and handoff:** read `references/validation-and-handoff.md` (Phase 8.5 structured-data / sitemap / robots / meta / AI-file validation; Phase 9 handoff report format; Phase 9.5 pre-launch checklist for non-production builds).
 
-**Templates and guards:** read `references/templates-and-guards.md` (DESIGN.md SEO section, `plan/seo/PLAN.md` plan structure, relationship to other tina4 skills, and the avoid-list).
+**Templates and guards:** read `references/templates-and-guards.md` (DESIGN.md SEO section, `plan/seo.md` plan structure, relationship to other tina4 skills, and the avoid-list).

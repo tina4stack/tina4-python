@@ -52,7 +52,7 @@ breaking what must not break. Three tiers:
 - 🎚️ **Default with a reason - follow unless this project genuinely differs.**
   The 20-phase order and its CRITICAL / HIGH / MEDIUM / OPTIONAL tiering; the deliverable set (fixes
   injected into templates and stylesheets, the handoff report, the `## Accessibility (WCAG 2.1 AA)`
-  section appended to `design/DESIGN.md`, `plan/a11y/PLAN.md`); the 44×44px touch-target target over
+  section appended to `design/DESIGN.md`, `plan/a11y.md`); the 44×44px touch-target target over
   the WCAG-only 24×24 minimum; the `:focus-visible` box-shadow ring pattern; `prefers-reduced-motion`
   duration tokens redefined to 0ms; the avoid-list of accessibility anti-patterns. Depart deliberately,
   name the reason, and record it.
@@ -165,4 +165,4 @@ Twenty phases, tiered by priority. Phase 1 discovers and scopes; Phases 2-6 are 
 
 **Phase 19 - High contrast mode (OPTIONAL):** read `references/zoom-reflow-motion.md` (`@media (forced-colors: active)` to restore indicators).
 
-**Phase 20 - Validation and handoff:** read `references/validation-and-handoff.md` (keyboard walkthrough, screen reader walkthrough, re-run tools, handoff report, DESIGN.md accessibility section, `plan/a11y/PLAN.md`, relationship to other skills, avoid-list).
+**Phase 20 - Validation and handoff:** read `references/validation-and-handoff.md` (keyboard walkthrough, screen reader walkthrough, re-run tools, handoff report, DESIGN.md accessibility section, `plan/a11y.md`, relationship to other skills, avoid-list).

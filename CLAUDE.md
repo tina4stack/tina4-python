@@ -61,7 +61,7 @@ Version 3.13.163 - Lightweight Python web framework. See https://tina4.com for f
 - **Routes return `response()`** — Always use `response()` not `response.json()`. This is the Tina4 convention
 - **Error handling in routes** — Wrap route logic in `try/except`, log with `Debug.error()`, return `response()` with appropriate status
 - **All links and references** should point to https://tina4.com
-- **Push to staging only** — Never push to production without explicit approval
+- **Pull requests only (ADR-0073)** — Never push directly to `v3` or `main` (or `v2`); work on a feature branch, open a PR, wait for the required checks, then merge. Never force-push or move a tag. A tag publishes, merging never does
 - Linting: `ruff`
 - Async mode: `asyncio_mode = auto` (pytest-asyncio)
 
@@ -122,7 +122,7 @@ tina4_python/          # Core framework package
   frond/               # Template engine (Frond — replaces Template)
     engine.py          # Frond class (render, add_filter, add_global, add_test)
   api/                 # HTTP client (Api class — zero deps)
-  queue/               # Database-backed job queue (Queue, Job)
+  queue/               # File-backed job queue by default (Queue, Job; LiteBackend = JSON files on disk)
   swagger/             # OpenAPI 3.0.3 generator (Swagger, description, tags, example)
   migration/           # SQL-file migrations (migrate, create_migration, rollback)
     runner.py          # Migration runner
@@ -379,7 +379,7 @@ Max upload size: `TINA4_MAX_UPLOAD_SIZE` env var (default 10MB).
 ```python
 from tina4_python.auth import Auth, get_token, valid_token, get_payload
 
-# expires_in is in MINUTES (default 60). Reads SECRET from env.
+# expires_in is in MINUTES (default 60). Reads TINA4_SECRET from env.
 token = get_token({"user_id": 1}, expires_in=60)       # 60 minutes
 payload = valid_token(token)                            # dict | None
 payload = get_payload(token)                            # decode without verifying
@@ -596,7 +596,7 @@ api.set_bearer_token(token)
   not authenticate to; same-origin redirects keep them.
 ```
 
-### Queue — Database-backed job queue
+### Queue — File-backed job queue (LiteBackend default; RabbitMQ / Kafka / MongoDB optional)
 
 ```python
 from tina4_python.queue import Queue
@@ -907,7 +907,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - ORM via `tina4_python.orm` (ORM, Field, bind_database)
 - Template engine via `tina4_python.frond` (Frond — Jinja2/Twig-compatible, replaces Template)
 - JWT auth via `tina4_python.auth` (zero-dep HMAC-SHA256, password hashing via PBKDF2)
-- Queue via `tina4_python.queue` (database-backed, zero deps)
+- Queue via `tina4_python.queue` (file-backed by default, zero deps)
 - WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis or NATS pub/sub — **wired for real**: each `broadcast`/`broadcast_all`/`broadcast_to_room` delivers to LOCAL connections first (resilient — a dead/slow client is logged + pruned, never aborting the rest), then publishes an envelope `{src,kind,exclude,room,path,+text|b64}` to the shared channel `tina4:ws`; a sibling instance's backplane listener relays it to its own LOCAL connections only (origin guard drops the instance's own echo by `src`; the relay never re-publishes — no cluster loop). Lazily started on first broadcast (best-effort — a backplane failure logs + degrades to local-only, never crashes a broadcast). Configured via `TINA4_WS_BACKPLANE` (`redis` or `nats`) and `TINA4_WS_BACKPLANE_URL`. **Security**: origin allow-list via `TINA4_WS_ALLOWED_ORIGINS` (comma-separated; empty/unset = allow all — non-breaking; set = reject mismatched/missing Origin 403 on every upgrade path). **Idle reaper**: `TINA4_WS_IDLE_TIMEOUT` (seconds; 0/unset = disabled) closes connections idle past the timeout. (Per-route WS auth is a deliberate follow-up — the origin allow-list is the shipped control.) Rooms API: `ws.join_room(name)`, `ws.leave_room(name)`, `ws.rooms`, `ws.broadcast_to_room(name, msg)`, `mgr.room_count(name)`, `mgr.get_room_connections(name)`, `mgr.broadcast_to_room(name, msg, exclude=None)`. SSE/`response.stream()` hardened: a client disconnect cancels the generator cleanly and a generator error mid-stream is logged + ends cleanly (worker never crashes).
 - API client via `tina4_python.api` (urllib-based, zero deps)
 - Swagger via `tina4_python.swagger` (OpenAPI 3.0.3 generator)

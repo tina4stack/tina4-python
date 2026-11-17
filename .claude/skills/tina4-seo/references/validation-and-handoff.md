@@ -96,7 +96,7 @@ RFG package:      ✅ complete  |  ⏳ pending — [reason]
 
 ### Files changed
 [List every file that was created or modified, with a one-line description]
-- src/templates/main.html — structured data, meta tags, favicon links
+- src/templates/base.twig — structured data, meta tags, favicon links
 - public/robots.txt — added AI crawler allow rules and Sitemap directive
 - public/sitemap.xml — generated from route list
 - public/llms.txt — created
@@ -110,7 +110,7 @@ RFG package:      ✅ complete  |  ⏳ pending — [reason]
 
 ## Phase 9.5 — Pre-launch checklist (when environment != production)
 
-If Phase 1.5 selected anything other than production, write `plan/seo/PRE-LAUNCH-CHECKLIST.md`. This is the one file the developer works through before flipping the site live. Every skipped or placeholder-carrying item lands here as a concrete task with a file path.
+If Phase 1.5 selected anything other than production, write `plan/seo/PRE-LAUNCH-CHECKLIST.md` and link it from `plan/seo.md`. This is the one file the developer works through before flipping the site live. Every skipped or placeholder-carrying item lands here as a concrete task with a file path.
 
 Template:
 

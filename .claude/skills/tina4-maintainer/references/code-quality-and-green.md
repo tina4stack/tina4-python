@@ -240,7 +240,8 @@ on any part of Tina4, you should always be asking:
 - **Keep the bar high** — Any proposed addition must pass the same tests: does it earn its
   lines? Is it simple? Zero deps? Works across all four languages?
 - **Think about distribution impact** — Will this addition increase the framework size? Can it
-  be implemented without growing the ~5000 LOC target?
+  be implemented without growing the framework? (The old ~5,000 LOC figure is an aspiration,
+  not a budget; see Core Principle 3 in `references/principles-and-languages.md`.)
 
 ### Human AND AI Friendly — The North Star
 

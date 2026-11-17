@@ -74,8 +74,10 @@ back to one of these:
    Every implicit conversion that eliminates a manual step for the developer is a win — as long
    as the behavior is predictable and never surprising.
 
-3. **Code efficiency** — Target ~5000 LOC per language for the entire framework. Every line must earn
-   its place. If you can delete code without losing functionality, do it.
+3. **Code efficiency** — Every line must earn its place. The original aspiration was ~5,000 LOC per
+   language; each framework is now far larger (Python's `tina4_python/` is ~69k lines), so treat it
+   as direction, not a budget: if you can delete code without losing functionality, do it, and never
+   grow a subsystem to add what an existing one covers.
 
 4. **SQL-first ORM** — Developers write less code, not less SQL. The ORM helps with CRUD but never
    hides the database. Complex queries should be SQL, not method chains.
@@ -94,7 +96,8 @@ back to one of these:
    - **Error messages** — same wording, same status codes, same JSON structure
    - **API responses** — same JSON shapes (pagination, CRUD, health check, Swagger)
    - **Project structure** — same directories, same conventions
-   - **CLI commands** — same flags, same output format (language-prefixed: tina4py, tina4php, etc.)
+   - **CLI commands** — same flags, same output format (framework CLIs: `tina4python`, `tina4php`,
+     `tina4ruby`, `tina4nodejs`, all reached through the `tina4` client)
 
    The rule: if a developer learns Tina4 in Python, they should feel at home in the PHP, Ruby,
    or Node.js version without reading new docs. Only the code they write changes — everything
@@ -112,15 +115,17 @@ back to one of these:
 10. **Production-ready by default** — Health check, graceful shutdown, request ID tracking,
     structured logging, rate limiting, CORS — all included, not bolted on.
 
-11. **Smallest possible distribution** — Obsess over distribution size. Docker images target
-    40-80MB (3-10x smaller than typical frameworks). Every byte must justify its existence:
+11. **Smallest possible distribution** — Obsess over distribution size. Every byte must justify its
+    existence:
     - Multi-stage Docker builds — build deps never ship to production
     - Tree-shake aggressively — if a module isn't imported, it doesn't ship
     - Prefer stdlib over vendored code — it's already in the runtime
     - Compress what you can — minify JS/CSS, strip debug symbols in production
     - Measure image size before and after every change, just like benchmarks
     - Zero third-party deps already helps enormously — no bloated `node_modules` or `vendor/`
-    - Target: Python ~80MB, PHP ~50MB, Ruby ~60MB, Node.js ~40MB (Alpine/distroless)
+    - Current `:v3` images, compressed on Docker Hub (2026-11-17): Python ~14 MB, PHP ~43 MB,
+      Ruby ~42 MB, Node.js ~65 MB. Re-measure on the Hub API; never let a change grow them
+      without a reason (`references/cli-and-deployment.md`, Docker)
 
     The goal is the leanest possible distribution that still has 100% of Tina4's features.
     Smaller images mean faster deploys, less bandwidth, less storage, less attack surface,
@@ -144,10 +149,10 @@ template-language convention, not a host-language one.
 
 ### Language-Specific Idioms
 
-**Python:** Python 3.12+ minimum (never target older versions), async/await everywhere, type hints, ASGI-based, `uv` as package manager
-**PHP:** PHP 8.5+ minimum, Swoole for WebSocket (fallback to stream_socket), `hash_hmac` (PHP core) for the HMAC JWT family — ext-openssl is needed only for opt-in RS256
-**Ruby:** Ruby 4.0.0+ minimum, `?` suffix for predicates, `!` for mutators, OptionParser for CLI
-**Node.js:** Node.js 25.8.1+ minimum, TypeScript-first, ESM-only, file-based routing
+**Python:** Python 3.12+ minimum (`pyproject.toml`; never target older versions), async/await everywhere, type hints, ASGI-based, `uv` as package manager
+**PHP:** PHP 8.2+ minimum (`composer.json`), Swoole for WebSocket (fallback to stream_socket), `hash_hmac` (PHP core) for the HMAC JWT family — ext-openssl is needed only for opt-in RS256
+**Ruby:** Ruby 3.1+ minimum (gemspec `required_ruby_version`), `?` suffix for predicates, `!` for mutators, OptionParser for CLI
+**Node.js:** Node.js 22+ minimum (`package.json` `engines`; `node:sqlite`), TypeScript-first, ESM-only, file-based routing
 
 ### Deprecation Awareness
 
@@ -155,12 +160,12 @@ Stay current with deprecations in all four languages. When working on any Tina4 
 
 - **Actively look for deprecated APIs** — If you encounter deprecated functions, classes, or
   patterns, refactor them immediately. Don't leave deprecation warnings for later.
-- **Use modern replacements** — Python 3.12+, PHP 8.5+, Ruby 4.0.0+, and Node.js 25.8.1+ all
+- **Use modern replacements** — Python 3.12+, PHP 8.2+, Ruby 3.1+, and Node.js 22+ all
   have modern alternatives for deprecated features. Use them.
 - **Flag deprecations you find** — When auditing or reviewing code, surface any deprecated usage
   in your dashboard output so the maintainer can see the full picture.
-- **Check changelogs** — When the minimum version targets are this aggressive, there are likely
-  newer, better ways to do things. Prefer the latest idiomatic patterns over legacy approaches.
+- **Check changelogs** — Newer runtimes often add better ways to do things. Prefer the latest
+  idiomatic pattern that still runs on the minimum version above over a legacy approach.
 
 This is part of the continuous improvement mindset — Tina4 code should never emit deprecation
 warnings. If it does, that's a bug to fix, not a warning to ignore.
@@ -226,7 +231,7 @@ All four frameworks use this identical layout:
 ```
 .env.example          # Environment template
 bin/                  # CLI entry point + frond.js (auto-updated on startup)
-data/                 # Runtime data (.broken files, queue DB)
+data/                 # Runtime data (.broken files, file-backed queue)
 logs/                 # Structured logs (JSON in prod, human in dev)
 secrets/              # Certificates, keys (gitignored)
 src/

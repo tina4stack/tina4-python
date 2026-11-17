@@ -8,6 +8,12 @@ A release is tagged, not merged — **merging never publishes; the tag does.** A
 `release` environment (required reviewer `tina4stack`). Do FEWER, BIGGER releases — bundle many
 changes; never release-per-tiny-change. The version line stays `3.13.x` while in flux.
 
+## Go-ahead
+
+- [ ] **The maintainer has said to ship this version.** That instruction IS the go-ahead: after
+      it, tag, approve the release deployment (as `tina4stack`), publish and verify without asking
+      again.
+
 ## Bank the release
 
 - [ ] Cut `feature/release<version>` FRESH from the active release line (`git checkout -B
@@ -31,7 +37,8 @@ changes; never release-per-tiny-change. The version line stays `3.13.x` while in
 
 - [ ] **Independently re-run every framework's full suite green at the merge HEAD** (no mocks,
       zero skips) BEFORE tagging.
-- [ ] Merge `feature/release<version>` into the release line (`v3`), then tag `<version>` on each repo.
+- [ ] Merge `feature/release<version>` into the release line (`v3`) through a PR (required checks
+      green), then tag `<version>` on each repo.
 - [ ] Approve the pending `release`-environment deployment when it appears. The required reviewer
       is the `tina4stack` account, so approve AS it (it is in the gh keyring), without switching the
       active account:

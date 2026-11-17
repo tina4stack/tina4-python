@@ -213,7 +213,7 @@ inject dynamic values:
 
 **PHP example:**
 ```html
-<!-- In src/templates/main.html, inside <head> -->
+<!-- In src/templates/base.twig, inside <head> -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",

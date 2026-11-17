@@ -11,7 +11,8 @@ your own session — **do not trust its claim that tests pass.** Re-verify it yo
 commit, merge, or release:
 
 - **Re-run the full suite yourself** at the exact HEAD you're about to ship (`pytest`, `phpunit`,
-  `rspec`, `npx tsx test/run-all.ts` + `npm run typecheck`). An agent's own green run has repeatedly
+  `rspec`, `npm test && npm run typecheck` - `npm test` is `tsx test/run-all.ts && npm run test:i18n`, so
+  calling `run-all.ts` directly skips the i18n suite). An agent's own green run has repeatedly
   masked real bugs — the **".env.local lesson"**: a stray `.env.local` override clobbered real env
   vars and broke an integration suite that the agent's own run had passed; only an independent
   re-run caught it. Several cross-framework bugs (Node fragment parser, PHP backplane autoload,

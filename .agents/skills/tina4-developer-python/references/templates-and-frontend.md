@@ -25,46 +25,53 @@ html = Frond(template_dir="src/templates").render("index.twig", {"title": "My Ap
 
 ### Globals (values available in every template)
 
-Register a value every template can read with `add_global`:
+Register a value every template can read with the CLASS-level `Frond.add_global`, once, at boot
+(in `app.py`, before `run()`):
 
 ```python
 from tina4_python.frond import Frond
-engine = Frond(template_dir="src/templates")
-engine.add_global("app_name", "My App")
+Frond.add_global("app_name", "My App")      # class call: every engine gets it
 ```
+
+Call it on the class, not on an instance. `add_global` works both ways, but an instance call
+(`Frond(template_dir=...).add_global(...)`) changes only that one engine. A throwaway instance is
+not the engine `response.render` uses, so the global never reaches your pages. Each engine copies
+the class-level globals when it is created, and the `response.render` engine is created on the
+first render, so register at boot, before any request.
 
 ```twig
 <title>{{ app_name }}</title>
 ```
 
-**`add_global` takes a VALUE, not a lazy callable.** Whatever you pass is stored
-as-is and merged into the render context unchanged — Frond never calls it for you
-when you name it bare. A function or lambda is therefore stored uncalled, and in
-a condition it is a plain object, which is truthy. So this section shows to
-everyone:
+**A zero-argument function global is called for you (ADR-0085).** When you pass
+`add_global` a plain function, lambda, or method that takes NO parameters, Frond wraps
+it. A bare reference in a template then uses the RETURN value, and `name()` still
+calls it. So this works as you expect:
 
 ```python
-frond.add_global("admin_only", lambda: access.admin_only())   # WRONG for {% if %}
+Frond.add_global("admin_only", lambda: access.admin_only())
 ```
 
 ```twig
-{% if admin_only %} ...admin link... {% endif %}   {# always true — admin_only is a function #}
+{% if admin_only %} ...admin link... {% endif %}   {# uses the lambda's return value #}
+{% if admin_only() %} ...admin link... {% endif %} {# same result #}
 ```
 
-Verified on tina4-python 3.13.x with `add_global("g", lambda: False)`:
-`{% if g %}` is **true** and only `{% if g() %}` calls it (false). Fixes:
+The function runs on every reference, at render time, so keep it cheap. Two cases are
+NOT wrapped and are stored as-is:
 
-- **Resolve it before you pass it:** `frond.add_global("admin_only", access.admin_only())` — a real bool.
-- **Or call it in the template:** `{% if admin_only() %}`.
-- **Accept either a function global or a plain bool from the render context:**
-  `{% if (admin_only is boolean and admin_only) or admin_only() %}`. A name that
-  is not registered, called as `nope()`, renders as false (it does not throw on
-  3.13.x), so this form is safe when the global is missing.
+- **A callable that takes parameters** (`lambda user: ...`). A bare `{% if name %}` sees
+  the function object, which is always truthy. Call it with its arguments: `{{ name(user) }}`.
+- **An object with `__call__`** that is not a plain function or method. Same rule: call it
+  explicitly.
 
-**Tests must register the global the way the app does.** A plain bool passed in
-the render context (`render(tpl, {"admin_only": False})`) makes `{% if admin_only %}`
-behave correctly, so a test that passes a bool hides the closure bug that
-production hits through `add_global`.
+Older releases (before ADR-0085) stored every callable uncalled, so a bare `{% if g %}`
+was always true. If the project pins an older tina4-python, pass a resolved value or
+write `{% if g() %}`.
+
+**Tests must register the global the way the app does.** A plain bool passed in the
+render context (`render(tpl, {"admin_only": False})`) skips the `add_global` path, so a
+test that passes a bool cannot catch a mistake in how the app registers the global.
 
 ### Basic Syntax
 
@@ -192,64 +199,84 @@ rendered output, it does not run queries.
 
 ## frond.js — Frontend Helper
 
-A lightweight (<10KB) JavaScript library that ships with the framework. Include it:
+A small JavaScript helper that ships with the framework. Include it:
 
 ```html
 <script src="/js/frond.js"></script>
 ```
 
+It defines ONE global, `window.frond` (lower case). Its members are `request`, `load`, `post`,
+`inject`, `form` (`collect` / `submit` / `show`), `ws`, `sse`, `live`, `cookie`, `message`,
+`popup`, `report`, `graphql`, and the `token` property. Nothing else exists: there is no
+`Frond` global, no `saveForm` / `loadPage` / `sendRequest`, and no notify, modal, confirm, or
+CRUD-table helper. If you think you need one, read `tina4_python/public/js/frond.js` first.
+
 ### HTTP Requests
 
+Callback style (it uses `XMLHttpRequest`, not promises):
+
 ```javascript
-const users = await Frond.get("/api/users");
-await Frond.post("/api/users", { name: "Alice" });
-await Frond.put("/api/users/1", { name: "Alice Smith" });
-await Frond.delete("/api/users/1");
+frond.request("/api/users", {
+    method: "GET",                                  // default GET
+    onSuccess: (data, status, xhr) => render(data), // JSON is parsed for you
+    onError: (status, xhr) => frond.message("Load failed", "danger"),
+});
+
+// An object body is sent as JSON; a FormData body is sent as-is.
+frond.request("/api/users", { method: "POST", body: { name: "Alice" }, onSuccess: done });
+frond.request("/api/users/1", { method: "PUT", body: { name: "Alice Smith" }, onSuccess: done });
+frond.request("/api/users/1", { method: "DELETE", onSuccess: done });
 ```
+
+### Load and post HTML fragments
+
+```javascript
+frond.load("/users/partial", "user-list");            // GET, inject the HTML into #user-list
+frond.post("/users/search", { q: "ali" }, "results"); // POST, inject the response into #results
+```
+
+The target is an element id without `#`. Both default to `content`. If the JSON response has a
+`message` key, `post` injects that.
 
 ### Forms
 
 ```javascript
-Frond.submitForm("#user-form", "/api/users");
-Frond.fillForm("#user-form", { name: "Alice", email: "alice@example.com" });
-Frond.resetForm("#user-form");
+// Collect every input / select / textarea inside #user-form (files and checkboxes too)
+// and POST it as FormData. The response goes into #message by default.
+frond.form.submit("user-form", "/api/users", "message");
+
+const data = frond.form.collect("user-form");       // just build the FormData
+frond.form.show("edit", "/users/1/form", "form");   // GET a form fragment into #form
 ```
 
-### CRUD Table (auto-generated)
+The form id is passed WITHOUT `#`. A `formToken` field rendered by `{{ form_token() }}` is sent
+as the server rendered it.
+
+### Messages and popups
 
 ```javascript
-Frond.crud({
-    target: "#users-table",
-    endpoint: "/api/users",
-    columns: ["id", "name", "email"],
-    searchable: true,
-    paginated: true
-});
-```
-
-### Notifications and Modals
-
-```javascript
-Frond.notify("Saved!", "success");
-Frond.notify("Error!", "error");
-Frond.confirm("Delete this item?").then(ok => { if (ok) { /* delete */ } });
-Frond.modal({ title: "Edit User", body: "<form>...</form>" });
+frond.message("Saved!", "success");   // writes an alert into the #message element
+frond.popup("/report/1", "Report", 800, 600);
 ```
 
 ### Authentication
 
 ```javascript
-Frond.config({ auth: true });
-Frond.setToken(jwt);        // stored in memory
-// Subsequent same-origin requests auto-attach the Bearer token (never cross-origin)
+frond.token = jwt;   // kept in memory only, never in storage
+// From now on, same-origin requests send Authorization: Bearer <jwt>. Cross-origin never.
 ```
+
+frond.js also takes a `FreshToken` response header from your own origin as the new token. It
+sends no token until one is set or received.
 
 ### WebSocket
 
 ```javascript
-const ws = Frond.ws("/ws/chat", {
-    reconnect: true,
-    onMessage: (data) => console.log(data),
-});
-ws.send({ type: "message", text: "Hello" });
+const ws = frond.ws("/ws/chat", { reconnect: true });   // auto-reconnect with backoff
+ws.on("message", (data) => console.log(data));          // JSON is parsed for you
+ws.on("open", () => ws.send({ type: "message", text: "Hello" }));
 ```
+
+`frond.ws` does NOT send the bearer token. For a secured socket pass it as a subprotocol:
+`frond.ws("/ws/chat/1", { protocols: ["bearer", frond.token] })`. The server also accepts
+`?token=<jwt>`, but a query string ends up in access logs, so prefer the subprotocol.

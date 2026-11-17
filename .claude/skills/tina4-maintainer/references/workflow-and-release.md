@@ -10,18 +10,19 @@ The full v3 plan - specs, the feature-by-feature audit, and the contract-fixture
 consolidations - lives in ONE framework-agnostic place: **`tina4-documentation/plan/v3/`**
 (the `tina4-documentation` repo, `main` branch). Cite plan docs by repo-prefixed path
 (e.g. `tina4-documentation/plan/v3/01-FEATURE-MATRIX.md`). A per-repo `<repo>/plan/`
-holds only that language's task plans; the cross-framework work is central.
+holds only that language's task plans; a task plan for four-framework work lives centrally in
+`tina4-documentation/plan/v3/<task>.md`. A `MASTER.md` plan index is optional.
 
 **The audit + consolidation backbone - where feature parity is actually driven:**
 
 | Path (under `tina4-documentation/plan/v3/`) | Content |
 |-----|---------|
 | `98-feature-audit.md` | Master audit tracker: audit every feature, pick the best implementation (ADR-0004), park a plan |
-| `specs/NNN-<feature>.md` | The canonical per-feature SPEC: intent, `AC-N` acceptance criteria, non-goals, tasks; each `AC-N` maps 1:1 to a fixture case (`audit-spec-coverage.py` gates it). The source of truth; code is derived |
+| `specs/NNN-<feature>.md` | The canonical per-feature SPEC: intent, `AC-N` acceptance criteria, non-goals, tasks; each `AC-N` maps 1:1 to a fixture case (`audit-spec-coverage.py` gates it). The source of truth; code is derived. **Target state, adopted per feature:** today `specs/` holds only README + TEMPLATE |
 | `features/NNN-*.md` | One parked plan per feature (pattern + methodology + tests to write) |
 | `fixtures/*_contract.json` + `CONTRACT-MAP.md` | Executable consolidations - the SAME bytes drive all four runners; mapped spec `AC-N` -> fixture case -> ADR -> proven/owed |
 | `DECISIONS.md` + `decisions/ADR-*.md` | ADR log; supersede explicitly, never silently |
-| `scripts/audit-contract-fixtures.py` | The proven/owed source of truth - never hand-count (MASTER-SPEC numbers are stale) |
+| `tina4-documentation/scripts/audit-contract-fixtures.py` (repo root, not under `plan/v3/`) | The proven/owed source of truth - never hand-count (MASTER-SPEC numbers are stale) |
 
 **To advance a feature:** pick from the parity backlog -> write/confirm its SPEC
 (intent + `AC-N` acceptance criteria + non-goals, `specs/NNN-<feature>.md`) ->
@@ -29,7 +30,7 @@ MEASURE all four (no mocks, on the lab) -> DECIDE + write/supersede an ADR on a
 contract change -> write the fixture (one case per `AC-N`) + fix divergences in ALL
 FOUR with named +/- regressions -> flip owed->proven per criterion via
 `audit-contract-fixtures.py` + `audit-spec-coverage.py` + update `CONTRACT-MAP.md` ->
-verify at HEAD on the lab -> ship `feature/release<ver>` -> `v3` -> tag. Plan edits into tina4-documentation
+verify at HEAD on the lab -> ship `feature/release<ver>` -> PR -> `v3` -> tag. Plan edits into tina4-documentation
 MERGE, never rebase (the subtree graft + the PDF-sync bot).
 
 **The specs** - deep detail beyond the bundled references:
@@ -37,7 +38,7 @@ MERGE, never rebase (the subtree graft + the PDF-sync bot).
 | Doc | Content |
 |-----|---------|
 | 00-VISION.md | Core principles and inspirations |
-| 01-FEATURE-MATRIX.md | All 78 features across 7 phases |
+| 01-FEATURE-MATRIX.md | The flat feature catalog (with `FEATURE-CATALOG.json`); read the current count there, never quote one from memory |
 | 02-FROND-*.md | Frond template engine full spec |
 | 03-TINA4HELPER-SPEC.md | frond.js frontend helper spec |
 | 04-ARCHITECTURE.md | Full architecture details |
@@ -52,45 +53,35 @@ MERGE, never rebase (the subtree graft + the PDF-sync bot).
 
 ## Repository Locations
 
-| Framework | Repo | v2 (stable) | v3 (next release) |
-|-----------|------|-------------|-------------------|
-| Python (reference) | tina4stack/tina4-python | main | v3 |
-| PHP | tina4stack/tina4-php | main | v3 |
-| Ruby | tina4stack/tina4-ruby | main | v3 |
-| Node.js | tina4stack/tina4-nodejs | main | v3 |
-| Frontend | tina4stack/tina4-js | main | main |
-| Delphi | tina4stack/tina4delphi | main | main |
-| Docs | tina4stack/tina4press | main | main |
+| Project | Repo | Release line (GitHub default branch) |
+|---------|------|--------------------------------------|
+| Python (leads API design) | tina4stack/tina4-python | `v3` |
+| PHP | tina4stack/tina4-php | `v3` |
+| Ruby | tina4stack/tina4-ruby | `v3` |
+| Node.js | tina4stack/tina4-nodejs | `v3` |
+| Rust CLI | tina4stack/tina4 | `main` |
+| Docs + central plan | tina4stack/tina4-documentation | `main` |
+| Book | tina4stack/tina4-book | `main` |
+| Frontend | tina4stack/tina4-js | `master` |
+| Delphi | tina4stack/tina4delphi | `master` |
 
-### Branch Strategy
+### Branch model
 
-The branching model follows: **development → staging → main**
+There is no development / staging branch. The model is one release line per repo:
 
-- **`development`** — Local development. Feature branches merge here. This is where you
-  write and test code day-to-day.
-- **`staging`** (currently the `v3` branch) — Beta / pre-production. Code that's ready for
-  integration testing and review. v3 lives here until it's ready for release.
-- **`main`** — Production. Stable, released code that users depend on. Currently v2.
-
-**Flow:**
 ```
-feature/* → development → staging (v3 beta) → main (production)
-hotfix/*  → main + development
+feature/<name> (or fix/<name>, feature/release<ver>) → PR → v3 → tag publishes
 ```
 
-**Never let `main` run ahead of `staging`.** A hotfix on `main` is only half-done until it's merged
-back to `development`/`staging` — that is exactly the `hotfix/* → main + development` rule above. If
-`main` carries commits `staging` doesn't, the next `staging → main` promotion silently drops or
-conflicts with them, so **back-merge production down immediately** and keep the lower branches from
-falling behind what users already run.
-
-When working on Tina4:
-- **Ask which branch** — Is this a v2 hotfix or v3 feature work? Don't assume.
-- **v2 hotfixes**: Merge to `main` AND `development`. Keep changes minimal and backwards-compatible.
-- **v3 features**: Work on `development`, promote to `staging` when tested.
-- **Never merge staging into main prematurely** — v3 is a complete rewrite and is not backwards
-  compatible with v2. It ships when all four frameworks reach parity and the master maintainer
-  decides to release.
+- **The four frameworks:** `v3` is the release line and the GitHub default branch. Every change
+  goes feature branch → PR → required checks green → merge to `v3`. A tag on `v3` publishes.
+- **`tina4` (CLI) and `tina4-documentation`:** the same PR flow against `main` (a CLI tag
+  publishes; tina4.com deploys when `main` changes).
+- **`main` / `v2` in the four framework repos** are the v2-era lines. v3 work never targets them.
+- **No direct pushes** to `v3`, `main`, `master` or `v2` (ADR-0073, enforced by rulesets). Never
+  force-push, never move or delete a tag.
+- **State the target branch** in a plan or PR ("feature branch → PR → `v3`"). Do not ask which
+  branch when the repo's release line answers it.
 
 ### Release Methodology — Feature Branch Per Release (adopted 2026-06-19)
 
@@ -110,15 +101,19 @@ line stays releasable and an urgent patch can be cut without waiting on unrelate
    in each framework repo.
 2. **Bank everything for that release into the feature branch** — all four frameworks' parity work,
    fixes, docs, the version bump, and release notes. The release line stays clean until cut.
-3. **On release**: merge `feature/release<version>` back into the release mainline, **independently
-   verify every framework's full suite is green at that HEAD** (see *Independent Verification*),
-   then **tag `<version>`**. The tag (matching `[0-9]*.*.*`, e.g. `3.13.42`) is what triggers the
-   publish workflow in every repo — PyPI / Packagist / RubyGems / npm, and crates.io for the Rust
-   CLI. **Merging alone never publishes; the tag does.**
+3. **On release** (the maintainer has said to ship this version - that instruction is the
+   go-ahead, so do not ask again): merge `feature/release<version>` into the release line through
+   a PR, **independently verify every framework's full suite is green at that HEAD** (see
+   *Independent Verification*), then **tag `<version>`**, approve the parked `release` deployment
+   as `tina4stack`, and verify the publish (`references/checklists/release.md`). The tag (matching
+   `[0-9]*.*.*`, e.g. `3.13.42`) is what triggers the publish workflow in every repo — PyPI /
+   Packagist / RubyGems / npm, and crates.io for the Rust CLI. **Merging alone never publishes;
+   the tag does.**
 4. **Urgent patches** get their own short-lived `feature/release<patch>` off the release line —
    banked, merged, tagged independently of any larger in-flight feature branch.
 5. **Branch hygiene — merge when done, then delete.** The moment a branch's work lands (PR merged
-   or tag cut), delete it on the remote AND locally: `gh pr merge <n> --merge --delete-branch`, then
+   or tag cut), delete it on the remote AND locally: `gh pr merge <n> --merge --delete-branch` (a
+   merge commit is the default; use `--squash` instead when the PR author asks for it), then
    `git branch -D <branch>` and `git push origin --delete <branch>` for anything left behind. Never
    leave merged branches lying around — they are a trap. Two hard rules, both from real incidents:
    - **Cut every release/feature branch FRESH from the base** (`git checkout -B feature/release<v> origin/v3`).
@@ -128,21 +123,10 @@ line stays releasable and an urgent patch can be cut without waiting on unrelate
      share a default: the four framework repos live on **`v3`**, but `tina4` (CLI), `tina4-documentation`,
      and `tina4-book` default to **`main`**. A commit on a stale checkout lands on the wrong branch and
      pushes as a brand-new branch instead of the one you meant.
-6. **Solo / local work skips the ceremony - merge and push directly.** The feature-branch-per-release
-   flow above exists to keep a SHARED release line releasable while several people or workers have work
-   in flight. When you are the only engineer on the change and working locally, that ceremony buys
-   nothing: commit straight to the active release line (`v3`), or - if you did open a PR or cut a
-   short-lived feature branch - just **merge it and push**. No review gate, no waiting on a PR, no
-   feature branch required. The non-negotiables still hold every time: the full suite green at HEAD
-   before you push (*Independent Verification*), parity across all four frameworks, and **branch hygiene -
-   delete the branch the moment it merges** (rule 5, for a plain feature branch exactly as for a merged
-   PR). Reach for a feature branch only when the work must be parked off the release line, or when a
-   reviewer will actually read the PR - not as a reflex for every change.
-
-**Current reality (important):** the active release line for the v3 series is the **`v3`** branch —
-every 3.13.x release is tagged there; `main` is the stale v2-era default (480+ commits behind v3).
-So "merge to main" in this methodology means **merge to the active release mainline, which is `v3`
-today**. (If the project later promotes `v3` to be the literal default branch, update this section.)
+**Current reality:** the release line for the v3 series is the **`v3`** branch, which is also the
+GitHub default branch of all four framework repos — every 3.13.x release is tagged there. `main` in
+those repos is the v2-era line. Solo work follows the same flow: feature branch → PR → required
+checks → merge (ADR-0073 has no solo exception).
 The version line stays **3.13.x** while in flux — do FEWER, BIGGER releases (bundle many changes),
 never release-per-tiny-change.
 

@@ -216,7 +216,9 @@ articles = Article.with_trashed()
 
 ## Pagination
 
-`find()`, `all()`, `where()`, and `select()` accept `limit` and `offset`:
+`find()`, `all()`, `where()`, and `select()` accept `limit` and `offset`. **The default `limit` is
+100** (the same for `db.fetch()`), so a call without `limit` returns at most 100 rows. That is a
+cap, not "everything": pass a `limit`, or page with `offset`, when you need more.
 
 ```python
 users = User.all(limit=20, offset=40)   # page 3 at 20/page
@@ -744,7 +746,7 @@ in the box. **Need → Tina4 built-in (verified import/idiom) — don't add the 
 | OpenAPI / Swagger docs | `from tina4_python.swagger import description, tags, example, response_schema, security` — docs metadata only (see N1) |
 | WebSockets | `from tina4_python.core.router import websocket` — `@websocket("/ws/…")`; live regions via Frond `{% live %}` |
 | Real-time (WebRTC signalling, presence) | `from tina4_python import realtime, MeshBackend` (+ `LocalStorage`/`S3Storage` from `tina4_python.realtime.storage`) |
-| GraphQL API from models | `from tina4_python import GraphQL` — `GraphQL().auto_register(User, Post)` + `GraphQL.set_default(gql)` → `/graphql` *(don't add `graphene`, `strawberry`)* |
+| GraphQL API from models | `from tina4_python import GraphQL` — `gql = GraphQL(); gql.auto_register(User, Post)`, then serve it from your own `@post("/graphql")` route with `gql.execute(...)` (nothing is mounted for you) *(don't add `graphene`, `strawberry`)* |
 | SOAP / WSDL | `from tina4_python import WSDL, wsdl_operation` |
 | i18n / localization | `from tina4_python.i18n import I18n` — `.translate(key, params)` / `.t(key, **kwargs)`; JSON in `src/locales/` |
 | .env loading + typed env | `from tina4_python.dotenv import load_env`; `from tina4_python import Env` (typed getters) *(don't add `python-dotenv`)* |

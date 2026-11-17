@@ -131,6 +131,21 @@ for skill in "${SHARED[@]}"; do
   fi
 done
 
+# --------------------- 1b. full-copy shared skills: .agents/.cursor match .claude
+#
+# Section 1 compares each tree against the SAME tree in the siblings, so a drift
+# that every repo shares is invisible to it. tina4-js's .agents and .cursor trees
+# are FULL copies (unlike tina4-maintainer's, which are short entrypoint stubs),
+# and in 2026-11 they had fallen 77 lines behind .claude in every repo at once -
+# Codex and Cursor users missed whole sections - while section 1 said ok. So
+# compare them against this repo's .claude too.
+FULL_ACROSS_TOOLS=(tina4-js)
+for skill in "${FULL_ACROSS_TOOLS[@]}"; do
+  for tree in .agents .cursor; do
+    compare_dir "$REPO_ROOT/.claude/skills/$skill" "$REPO_ROOT/$tree/skills/$skill" "$skill $tree vs .claude"
+  done
+done
+
 # ------------------------------------ 2. tina4-developer-<lang>, inside each repo
 
 for repo in "$REPO_ROOT" "${SIBLINGS[@]/#/$PARENT/}"; do

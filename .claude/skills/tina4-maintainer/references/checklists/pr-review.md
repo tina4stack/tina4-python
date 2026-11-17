@@ -7,7 +7,7 @@ AND you have independently verified the work — an agent's own green run has ma
 ## Before you approve
 
 - [ ] **Re-run the full suite yourself at the PR HEAD** — never trust the PR's own green.
-      `pytest` / `vendor/bin/phpunit` / `bundle exec rspec` / `npm test` + typecheck.
+      `pytest` / `vendor/bin/phpunit` / `bundle exec rspec` / `npm test && npm run typecheck`.
 - [ ] **Zero failures AND zero skips.** Read the summary line. A skip is UNVERIFIED coverage,
       not a pass. Run under `TINA4_REQUIRE_SERVICES=1` so an unprovisioned service fails loud.
 - [ ] **No mocks.** Any test touching a dependency (DB, Mongo, Redis, broker, SMTP, socket,
@@ -71,9 +71,8 @@ found afterwards.
 
 ## Merging
 
-- [ ] Squash/merge per the repo convention (and the author's request), then `--delete-branch`.
-- [ ] If it was a hotfix on `main`, back-merge to `development`/`staging` immediately — never let
-      `main` run ahead of the lower branches.
+- [ ] Merge with a merge commit by default (`gh pr merge <N> --merge --delete-branch`); use
+      `--squash` instead when the PR author asks for it.
 - [ ] Close the plan item in the same turn: `[x]` + the merge commit hash under Commits.
 
 See [[release]] for cutting a release once a batch of PRs has landed, and [[parity-sweep]] for

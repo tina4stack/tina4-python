@@ -10,8 +10,8 @@ description: >
   complex builds miss) so features come from real user goals, not invention. Also triggers on "map the
   user journey", "what's the flow", "what are we missing", "trace the system". Records the choices in
   TINA4.md and seeds plan/ with goals, journeys, flows and initial ADRs. Hands off to the matching
-  tina4-developer-<lang> skill. Never runs on a scaffolded project (TINA4.md present) unless the user
-  asks to re-architect.
+  tina4-developer-<lang> skill. On a scaffolded project (TINA4.md present) it runs only when asked
+  explicitly: "map the journeys / flows" or "re-architect".
 ---
 
 # Tina4 Architect — decisions before code
@@ -27,7 +27,7 @@ You are the architect for a Tina4 project. Your job is not to write code. Your j
 Read top to bottom once, then jump by section. This skill has no `references/` directory - everything is below.
 
 **Orientation**
-- When you fire - and when you do not (`TINA4.md` exists, framework internals)
+- When you fire - and when you do not (`TINA4.md` exists without an explicit ask, framework internals)
 - **Degrees of freedom** - what is inviolable vs. a default vs. your judgement (read this next)
 
 **The decision flow** (nine decisions, recorded in `TINA4.md`)
@@ -39,7 +39,7 @@ Read top to bottom once, then jump by section. This skill has no `references/` d
 
 **Making it durable**
 - Project layout - single-project shape and multi-project shape
-- The plan-driven workflow - `plan/MASTER.md`, `plan/<task>/PLAN.md`, feature docs, journey and flow templates
+- The plan-driven workflow - `plan/MASTER.md`, one work plan per unit of work at `plan/<name>.md`, feature docs, journey and flow templates
 - Hand-off - to `tina4-developer-<language>` - Web Push selection
 - The `TINA4.md` template - Voice
 
@@ -66,8 +66,8 @@ breaking what must not break. Three tiers:
 
 - 🎚️ **Default with a reason - follow unless this project genuinely differs.**
   SQLite until you can name the reason to leave it; bare JWT and file sessions; no cache or queue
-  until a workload needs one; Frond plus tina4-js islands for most apps; the plan layout as drawn
-  (one `MASTER.md` per sub-project). Depart deliberately, record an ADR and say why - not by drift.
+  until a workload needs one; Frond server-rendered pages by default, with tina4-js islands for the
+  interactive parts; the plan layout as drawn (one `MASTER.md` per sub-project). Depart deliberately, record an ADR and say why - not by drift.
 
 - 🧭 **Judgement - read the task and choose.**
   Which backend language fits the team; how deep to map journeys for a small project; when a
@@ -83,13 +83,17 @@ Trigger when the user is at the start of something and does not yet have a Tina4
 - A conversation opens with "I want to build …", "help me plan …", "architect a …", "which framework should I use", "how should I structure this", "which database".
 - The working directory has no `TINA4.md`, no `plan/` folder, and no `app.py` / `index.php` / `app.rb` / `app.ts` at the root — i.e. this is a fresh checkout or a bare `tina4 setup` scaffold.
 - The user explicitly asks to re-architect an existing project.
+- The user (or the developer skill) explicitly asks to **map the journeys or flows** on a project that
+  is already scaffolded — for example a complex build with no `plan/journeys/`. Re-enter for that
+  work only: read the existing `TINA4.md`, write `plan/journeys/`, `plan/flows/` and any new ADR in
+  `plan/decisions/`, and do not re-run the nine decisions unless asked.
 
 Do NOT fire when:
 
 - A `TINA4.md` exists and the user asks a routine "add a route" / "fix a bug" question. Those belong to `tina4-developer-<lang>`.
 - A framework-internals question comes up. That belongs to `tina4-maintainer`.
 
-If uncertain, ask one clarifying question ("is this a new project or existing?"), never assume.
+If uncertain, look first: `TINA4.md`, `plan/`, and an entry file (`app.py` / `index.php` / `app.rb` / `app.ts`) tell you whether the project exists. Ask one clarifying question only if they do not settle it.
 
 ## The decision flow
 
@@ -114,13 +118,13 @@ Ask what the team writes today. Ask what the deployment target is. Ask which one
 
 ### 3. Frontend approach
 
-Three shapes, and they compose:
+The rule (the same in every Tina4 skill):
 
-- **Frond only** — server-rendered HTML with the built-in Twig-compatible template engine. Right for admin dashboards, forms-heavy apps, docs sites, anything where the page reloads on click. Zero client build step.
-- **Frond + tina4-js islands** — Frond renders the page, tina4-js hydrates specific components (a live search box, a shopping cart, a chat window). Right for mostly-static apps with a few interactive spots.
-- **tina4-js SPA** — a client-rendered app talking to a Tina4 backend via `Api` and `WebSocket`. Right for a real interactive product (a builder, a dashboard, a canvas app).
+- **Frond server-rendered pages are the default.** Built-in Twig-compatible template engine, zero client build step. Right for admin dashboards, forms-heavy apps, docs sites, anything where the page reloads on click.
+- **tina4-js islands are fine for the interactive parts of a page.** Frond renders the page and the island's host tag; a tina4-js `Tina4Element` mounts into it (a live search box, a shopping cart, a chat window). The island gets its initial data from attributes Frond writes, and more data from the tina4-js `api` client.
+- **A full tina4-js SPA is the choice when the frontend is decoupled from the backend** — a separate client-rendered app that talks to a Tina4 API (a builder, a canvas app, a frontend owned by another team).
 
-Frond and tina4-js are not either-or. Most real projects are the middle option.
+Frond and tina4-js are not either-or: most real projects are the middle option, Frond pages with a few islands. The one technical limit: one owner per piece of DOM and state — Frond and an island never render the same element. Record the pick in `TINA4.md` as `frond-only`, `frond+islands`, or `tina4-js SPA`.
 
 ### 4. Database
 
@@ -228,26 +232,32 @@ Nothing on this net is allowed to stay un-addressed by silence. That is the whol
 
 ## Project layout
 
-The layout is not negotiable. Enforce it every time.
+The layout is not negotiable. Enforce it every time. It is the same in every Tina4 skill:
+
+- **One work plan per unit of work, at `plan/<name>.md`**, with the sections Scope / Spec
+  (acceptance criteria) / Tests / Bugs / Commits / `## Status: In Progress|Complete`.
+- **Project-level artefacts live in sub-folders of `plan/`** and are linked from the plans that use
+  them: `plan/journeys/`, `plan/flows/`, `plan/features/` (long-form feature docs), `plan/decisions/`
+  (ADRs), and the records other skills write (for example `plan/seo/`).
+- `TINA4.md` (the nine decisions) stays at the project root, and the `tina4-design` deliverables stay
+  in `design/`. The plans link to them.
 
 ### Single-project shape (no sub-projects)
 
 ```
 project-root/
 ├── plan/
-│   ├── MASTER.md              # top-level index: what this project IS + goals, journeys, flows, tasks
-│   ├── goals.md               # the concrete outcomes each user needs (Phase 2.1)
+│   ├── MASTER.md              # top-level index: what this project IS + its goals (Phase 2.1), journeys, flows, work plans
+│   ├── <name>.md              # ONE work plan per unit of work: Scope / Spec / Tests / Bugs / Commits / Status
 │   ├── journeys/
 │   │   ├── <journey>.md       # one user journey end-to-end; each step traces to a feature
 │   │   └── ...
 │   ├── flows/
 │   │   ├── <flow>.md          # one system flow: request→...→response, boundaries + tests marked
 │   │   └── ...
-│   ├── <task>/
-│   │   ├── PLAN.md            # the task's own plan: Scope / Tests / Bugs / Commits / Status
-│   │   └── features/
-│   │       ├── <feature>.md   # feature doc — how it actually works, in full
-│   │       └── ...
+│   ├── features/
+│   │   ├── <feature>.md       # feature doc — how it actually works, in full; linked from a work plan
+│   │   └── ...
 │   └── decisions/
 │       ├── ADR-0001-<slug>.md # architectural decisions ratified during planning
 │       └── ...
@@ -272,16 +282,16 @@ project-root/
 ├── backend/                   # tina4-python | tina4-php | tina4-ruby | tina4-nodejs
 │   ├── TINA4.md               # sub-project's own architecture record (may echo the root)
 │   └── plan/
-│       ├── MASTER.md          # backend's index → its own goals, journeys, flows, tasks
-│       ├── goals.md + journeys/ + flows/   # this sub-project's Phase 2
-│       ├── <task>/PLAN.md + features/
+│       ├── MASTER.md          # backend's index → its own goals, journeys, flows, work plans
+│       ├── <name>.md          # backend work plans
+│       ├── journeys/ + flows/ + features/   # this sub-project's Phase 2 + feature docs
 │       └── decisions/         # backend-only ADRs
 └── frontend/                  # tina4-js (SPA or islands)
     ├── TINA4.md
     └── plan/
-        ├── MASTER.md          # frontend's index → its own goals, journeys, flows, tasks
-        ├── goals.md + journeys/ + flows/   # this sub-project's Phase 2
-        ├── <task>/PLAN.md + features/
+        ├── MASTER.md          # frontend's index → its own goals, journeys, flows, work plans
+        ├── <name>.md          # frontend work plans
+        ├── journeys/ + flows/ + features/   # this sub-project's Phase 2 + feature docs
         └── decisions/         # frontend-only ADRs
 ```
 
@@ -291,9 +301,9 @@ Never put source code at the project root. Root holds plans, docs, and shared co
 
 ## The plan-driven workflow
 
-Every project has a `plan/MASTER.md`. Every task has its own folder under it with a `PLAN.md`. Bullets and checklists in a `PLAN.md` are **pointers, not descriptions** — the "how it actually works" content lives in `features/<feature>.md` under the same task folder.
+Every project has a `plan/MASTER.md`. Every unit of work has ONE work plan at `plan/<name>.md`. Bullets and checklists in a work plan are **pointers, not descriptions** — the "how it actually works" content lives in a feature doc at `plan/features/<feature>.md`, linked from the plan.
 
-Planning is fully scoped out. Sketchy bullets are not acceptable. A checkbox that reads `[ ] add auth` is a placeholder, not a plan; the task is planned only when the checkbox reads `[ ] add auth  → features/auth-flow.md` and the linked feature doc carefully spells out the login screen, token issuance, refresh, session backend, logout, and every edge case.
+Planning is fully scoped out. Sketchy bullets are not acceptable. A checkbox that reads `[ ] add auth` is a placeholder, not a plan; the work is planned only when the checkbox reads `[ ] add auth  → features/auth-flow.md` and the linked feature doc carefully spells out the login screen, token issuance, refresh, session backend, logout, and every edge case.
 
 ### `plan/MASTER.md` template
 
@@ -308,7 +318,7 @@ Planning is fully scoped out. Sketchy bullets are not acceptable. A checkbox tha
 - [frontend](./frontend/plan/MASTER.md) — <one-line role>
 
 ## Goals
-- <one line per user outcome the app exists to deliver>  → see [goals.md](./goals.md)
+- <one line per user outcome the app exists to deliver — a RESULT, not a feature>
 
 ## Journeys  🗺️
 - [<persona> — <goal>](./journeys/<journey>.md) — <one-line summary>
@@ -316,24 +326,25 @@ Planning is fully scoped out. Sketchy bullets are not acceptable. A checkbox tha
 ## Flows  🗺️
 - [<action>](./flows/<flow>.md) — <one-line summary; names the boundaries it crosses>
 
-## Tasks
-| Status      | Task                                                | Owner            |
+## Work plans
+| Status      | Plan                                                | Owner            |
 |-------------|-----------------------------------------------------|------------------|
-| In progress | [Auth](./auth/PLAN.md)                              | tina4-developer  |
-| Planned     | [Product catalog](./product-catalog/PLAN.md)        | tina4-developer  |
-| Done        | [Skeleton scaffold](./skeleton/PLAN.md)             | tina4-architect  |
+| In Progress | [Auth](./auth.md)                                   | tina4-developer  |
+| In Progress | [Product catalog](./product-catalog.md)             | tina4-developer  |
+| Complete    | [Skeleton scaffold](./skeleton.md)                  | tina4-architect  |
 
 ## ADRs
 - [ADR-0001 — session backend is Redis](./decisions/ADR-0001-session-redis.md)
 - [ADR-0002 — hand-off tokens are JWT HS256](./decisions/ADR-0002-jwt-hs256.md)
 ```
 
-### `plan/<task>/PLAN.md` template
+### `plan/<name>.md` work-plan template
 
 ```markdown
-# <task title>
+# <work title>
 
-Purpose (one paragraph, plain English — why this task exists and what shipping it changes).
+**Outcome:** <one line — the observable end state that counts as done>
+Serves: [<persona> — <goal>](./journeys/<journey>.md) steps N-M
 
 ## Scope
 - [ ] Login route + form  → [features/login-flow.md](./features/login-flow.md)
@@ -341,10 +352,16 @@ Purpose (one paragraph, plain English — why this task exists and what shipping
 - [ ] Logout revocation  → [features/logout-revocation.md](./features/logout-revocation.md)
 - [ ] Password-reset email  → [features/password-reset.md](./features/password-reset.md)
 
-## Tests (real, no mocks, positive + negative)
-- [ ] Login accepts a good credential, real SQLite session store  → [features/login-flow.md#tests](./features/login-flow.md#tests)
-- [ ] Login rejects a bad credential, does not leak which half was wrong  → [features/login-flow.md#tests](./features/login-flow.md#tests)
-- [ ] Logout revokes the session across every logged-in device  → [features/logout-revocation.md#tests](./features/logout-revocation.md#tests)
+## Spec — acceptance criteria (given / when / then; one real test each)
+- AC-1: given a good credential, when the user logs in, then a session is issued
+- AC-2: given a bad credential, when the user logs in, then 401 and the message does not say which half was wrong
+- AC-3: given two logged-in devices, when the user logs out on one, then both sessions are revoked
+- Non-goals: <what this work deliberately does not do>
+
+## Tests (real, no mocks, positive + negative) — ONE per acceptance criterion
+- [ ] AC-1 login accepts a good credential, real SQLite session store  → [features/login-flow.md#tests](./features/login-flow.md#tests)
+- [ ] AC-2 login rejects a bad credential, does not leak which half was wrong  → [features/login-flow.md#tests](./features/login-flow.md#tests)
+- [ ] AC-3 logout revokes the session across every logged-in device  → [features/logout-revocation.md#tests](./features/logout-revocation.md#tests)
 
 ## Bugs
 - (log here as [ ], tick when a real test proves it fixed; each entry links back to the feature doc it belongs to)
@@ -352,18 +369,20 @@ Purpose (one paragraph, plain English — why this task exists and what shipping
 ## Commits
 - (hash — description, one line per landed change)
 
-## Status: Planned | In Progress | Done
+## Status: In Progress
 ```
 
-### `plan/<task>/features/<feature>.md` template
+`## Status:` is `In Progress` from the moment the plan is written, and `Complete` once every Scope, Spec and Tests item is verified on a real run and the journey is walked end to end.
 
-The bullet in `PLAN.md` promises the reader that this file carefully explains the feature. Deliver on that promise. A feature doc is:
+### `plan/features/<feature>.md` template
+
+The bullet in the work plan promises the reader that this file carefully explains the feature. Deliver on that promise. A feature doc is:
 
 ```markdown
 # <feature name>
 
 ## Serves
-The journey step(s) and system flow(s) this feature implements — the traceability link back to Phase 2. E.g. `[checkout journey](../../journeys/checkout.md) steps 3-4 · [order-placement flow](../../flows/order-placement.md)`. A feature with no journey here is a feature nobody asked for.
+The journey step(s) and system flow(s) this feature implements — the traceability link back to Phase 2. E.g. `[checkout journey](../journeys/checkout.md) steps 3-4 · [order-placement flow](../flows/order-placement.md)`. A feature with no journey here is a feature nobody asked for.
 
 ## What it does
 One paragraph, colleague-voice, no jargon. If a new team member reads only this section, they understand the feature.
@@ -381,26 +400,26 @@ Walk through the happy path AND every branch. Numbered steps. Name every failure
 Every `TINA4_*` env var this feature reads. What each does. What it defaults to.
 
 ## Tests
-Named positive tests AND named negative tests. Real dependencies (no mocks). This section becomes the test-list the developer skill ticks off.
+Named positive tests AND named negative tests. Real dependencies (no mocks). Each one maps to an `AC-N` in the work plan's Spec, which is the test list the developer skill ticks off.
 
 ## Open questions
 Anything the architect deferred to the developer. Never a hidden assumption — always a listed question.
 ```
 
-No maintenance happens off-plan. A new request either matches an existing task (add checkboxes to its `PLAN.md`, extend the linked feature doc) or starts a new one (new folder under `plan/`, new `PLAN.md` referenced by `MASTER.md`, new feature docs). This rule holds for the whole life of the project, not just the first week.
+No maintenance happens off-plan. A new request either matches an existing work plan (add checkboxes to it, extend the linked feature doc) or starts a new one (a new `plan/<name>.md` referenced by `MASTER.md`, new feature docs in `plan/features/`). This rule holds for the whole life of the project, not just the first week.
 
 ### `plan/journeys/<journey>.md` template  🗺️
 
 ```markdown
 # Journey: <persona> — <goal>
 
-**Goal (from goals.md):** <the one-line outcome this journey delivers>
+**Goal (from the Goals list in MASTER.md):** <the one-line outcome this journey delivers>
 **Persona:** <who — their context, what they know, what device>
 
 ## Steps
 | # | The user … | Screen / route | Outcome on success | Exits (abandon / error / no-permission / refresh) | Feature |
 |---|------------|----------------|--------------------|---------------------------------------------------|---------|
-| 1 | lands on … | `/…`           | sees …             | not-logged-in → `/login`                          | [feature](../<task>/features/<f>.md) |
+| 1 | lands on … | `/…`           | sees …             | not-logged-in → `/login`                          | [feature](../features/<f>.md) |
 | 2 | submits …  | `POST /…`      | …                  | double-submit → idempotent; validation → inline   | [feature](...) |
 | … |            |                |                    |                                                   |         |
 
@@ -443,9 +462,9 @@ sequenceDiagram
 Hand off only when the nine decisions are in `TINA4.md` AND the goals, journeys, and flows are mapped in `plan/`. A stack with no journeys is not a plan — it is a shopping list. Announce it explicitly: "Architecture locked in TINA4.md, journeys and flows mapped in plan/. Handing implementation to `tina4-developer-<language>`." The developer skill then owns scaffolding and code — but it inherits this contract:
 
 - **Build in journey order.** Ship one walkable journey before scattering across features. A user who can complete ONE goal end-to-end beats ten half-built screens.
-- **Trace as you go.** Every route, model, and component you write points back to a journey step and a flow node. If it traces to neither, stop — it is not on the plan.
-- **Walk the net per feature.** Before a feature is Done, answer the completeness net for it (states, edges, authz, failure, concurrency) — not "later".
-- **Prove the journey, don't assume it.** A task is Done only when its journey steps are walked END TO END against real dependencies (no mocks), positive and negative. The walkable-proof test in the journey doc is the acceptance gate.
+- **Trace as you go.** Every route, model, and component you write points back to a journey step and a flow node. If it traces to neither, it is not on the plan — add it to the plan and the journey it serves and say so, or leave it out.
+- **Walk the net per feature.** Before a feature is ticked, answer the completeness net for it (states, edges, authz, failure, concurrency) — not "later".
+- **Prove the journey, don't assume it.** A work plan is Complete only when its journey steps are walked END TO END against real dependencies (no mocks), positive and negative. The walkable-proof test in the journey doc is the acceptance gate.
 - **Keep the marker.** When you map, update, or trace a journey or flow during execution, mark it 🗺️ — the maintainer needs to SEE the seams are being minded, not silently skipped.
 
 You may still be re-consulted when the project needs a new architectural decision (adding a queue, switching sessions to Redis, adding a second backend for a data-science pipeline). Every such change gets a new ADR, a `TINA4.md` update, and — if it changes how a user moves or how a request travels — an updated journey or flow.
@@ -464,7 +483,7 @@ The exact file you write at project root once the flow is done:
 <one-sentence project description>
 
 ## Goals & journeys  🗺️
-- Goals: `plan/goals.md` — <count> outcomes the app delivers
+- Goals: the Goals list in `plan/MASTER.md` — <count> outcomes the app delivers
 - Journeys: `plan/journeys/` — <count> mapped (every feature traces to one)
 - System flows: `plan/flows/` — <count> mapped (every boundary crossing owns a test)
 

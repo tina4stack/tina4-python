@@ -89,7 +89,9 @@ obey it. SDD adds the missing front-end - one canonical, human-readable spec per
 framework, and every agent, builds from. It does NOT replace the ADR/fixture backbone; it sits on top
 of it.
 
-**Every feature has a spec: `tina4-documentation/plan/v3/specs/NNN-<feature>.md`.** It carries:
+**Target state: every feature has a spec at `tina4-documentation/plan/v3/specs/NNN-<feature>.md`.**
+This is not the current state. Adoption is per feature, and today `specs/` holds only `README.md`
+and `TEMPLATE.md`, so most features have no spec yet. A spec carries:
 
 - **Intent** - what the feature does and why, in two or three lines, citing the governing ADR(s).
 - **Acceptance criteria** - the behaviour as numbered `AC-N` given/when/then lines. Each `AC-N` is one
@@ -99,8 +101,10 @@ of it.
 
 **The spec and the fixture are one system, mapped 1:1.** Every `AC-N` maps to a case in
 `fixtures/<feature>_contract.json`: the AC is the human form, the fixture case is the executable form,
-and they can never drift - `audit-spec-coverage.py` fails the build when an AC has no fixture case or a
-case no AC (the same gate shape as `audit-truth` / `audit-contract-fixtures`). "Proven/owed" becomes
+and they can never drift - `tina4-documentation/scripts/audit-spec-coverage.py --strict` (CI, in
+`audit-truth.yml`) fails the build when a spec'd feature has an AC with no fixture case or a case with
+no AC. A feature with no spec is not gated yet, and the gate passes while `specs/` holds no feature
+spec. "Proven/owed" becomes
 per-CRITERION, not per-feature: `CONTRACT-MAP.md` can say AC-3 is proven in Ruby and owed in Node.
 
 **The spec is the source of truth; the code is derived from it.** When behaviour must change, change

@@ -26,7 +26,8 @@ Append the following to `design/DESIGN.md` once the audit is complete:
 
 ## Plan structure
 
-Create `plan/seo/PLAN.md` in the project:
+Create the work plan `plan/seo.md` in the project. This follows the Tina4 plan layout used by every skill: one work plan per unit of work at `plan/<name>.md` with Scope / Spec / Tests / Bugs / Commits / `## Status: In Progress|Complete`; supporting records live in sub-folders of `plan/` and are linked from the plan. The pre-launch checklist
+(Phase 9.5) is such a record: `plan/seo/PRE-LAUNCH-CHECKLIST.md`, linked from this plan.
 
 ```markdown
 # SEO/AISO Plan — [Project Name]
@@ -34,6 +35,8 @@ Create `plan/seo/PLAN.md` in the project:
 **Outcome:** Full SEO and AISO coverage — structured data, AI discovery files, corrected
 robots.txt and sitemap, meta tags in base template, content audit complete, favicon package
 generated.
+Environment / URL mode: <production | staging + known prod | staging only | localhost> (Phase 1.6)
+Pre-launch checklist: [plan/seo/PRE-LAUNCH-CHECKLIST.md](./seo/PRE-LAUNCH-CHECKLIST.md) (only if not production)
 
 ## Scope
 - [ ] Phase 1: Discovery audit complete — current state documented
@@ -50,13 +53,28 @@ generated.
 - [ ] Phase 9: Handoff report — DESIGN.md updated, full report delivered
 - [ ] Phase 9.5: Pre-launch checklist written (only if environment != production)
 
+## Spec — acceptance criteria
+- AC-1: every page's JSON-LD validates (Rich Results Test / Schema Markup Validator) with no placeholder literals
+- AC-2: robots.txt allows the AI crawlers, and on production carries a live `Sitemap:` line; staging is non-indexable
+- AC-3: every `<loc>` in sitemap.xml returns 200 (production only)
+- AC-4: every page renders a unique `<title>`, meta description, canonical and og:* tags from the base template
+- AC-5: `/llms.txt`, `/llms-full.txt` and `/ai.txt` serve `Content-Type: text/plain`
+- Non-goals: <anything the intake left out of scope>
+
+## Tests — ONE check per acceptance criterion, run against the running site
+- [ ] AC-1 structured data validated
+- [ ] AC-2 robots.txt fetched and checked
+- [ ] AC-3 sitemap URLs fetched
+- [ ] AC-4 rendered `<head>` checked on each page type
+- [ ] AC-5 discovery files fetched, content type checked
+
 ## Bugs
 (none yet)
 
 ## Commits
 (none yet)
 
-## Status: Not Started
+## Status: In Progress
 ```
 
 ---

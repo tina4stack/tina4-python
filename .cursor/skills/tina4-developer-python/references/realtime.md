@@ -59,8 +59,8 @@ Note: `config` is added by **any** enabled feature (`calls` sets it; `chat`/`fil
 
 | feature | routes registered | auth |
 |---|---|---|
-| any | `GET  {p}/api/rtc/config` → `rtc_config` | **public** (no auth) |
-| `calls` | `WS   {p}/ws/rtc/{room}` → `rtc_signalling` | **public** (unauthenticated) |
+| any | `GET  {p}/api/rtc/config` → `rtc_config` | **secured** — valid token required, unless `TINA4_RTC_REQUIRE_AUTH=false` (ADR-0101) |
+| `calls` | `WS   {p}/ws/rtc/{room}` → `rtc_signalling` | **secured** — valid JWT required on upgrade, unless `TINA4_RTC_REQUIRE_AUTH=false` (ADR-0101) |
 | `chat` | `WS   {p}/ws/chat/{channel}` → `chat_ws` | **secured** — valid JWT required on upgrade (`chat_ws._secured = True`) |
 | `chat` | `GET  {p}/api/channels/{id}/messages` → history | `auth_required=True` |
 | `files` | `POST {p}/api/files` → upload | `auth_required=True` |
@@ -72,8 +72,9 @@ If `chat` or `files` is enabled, `_ensure_chat_tables()` runs at mount time (see
 
 ## `GET /api/rtc/config` — `rtc_config`
 
-Public bootstrap the frontend fetches (the tina4-js `rtcConfig()` helper) so client and server
-never drift. Body is feature-gated (only keys for enabled features appear):
+The bootstrap the frontend fetches (the tina4-js `rtcConfig()` helper) so client and server
+never drift. It mints TURN credentials, so it requires a valid Bearer token by default (ADR-0101);
+send the token with the request, or opt out with `TINA4_RTC_REQUIRE_AUTH=false`. Body is feature-gated (only keys for enabled features appear):
 
 ```jsonc
 {
@@ -117,6 +118,7 @@ TURN credential scheme: `username = str(int(time.time()) + ttl)`,
 | `TINA4_RTC_TURN_URL` | — | comma-separated TURN URLs; enables TURN when set with the secret. |
 | `TINA4_RTC_TURN_SECRET` | — | coturn `use-auth-secret` shared secret (ephemeral creds). |
 | `TINA4_RTC_TURN_TTL` | `3600` | ephemeral TURN credential lifetime (seconds). |
+| `TINA4_RTC_REQUIRE_AUTH` | `true` | read when `realtime()` runs. Only an explicit `false` / `0` / `no` / `off` opens the config route and the signalling WS to anonymous callers (anonymous calling). Anything else keeps them secured. |
 
 ---
 
@@ -138,7 +140,10 @@ TURN credential scheme: `username = str(int(time.time()) + ttl)`,
 
 ## Signalling: `rtc_signalling(connection, event, data)`
 
-Registered at `WS {p}/ws/rtc/{room}`. **This is the framework's websocket handler convention**
+Registered at `WS {p}/ws/rtc/{room}`, secured by default (`rtc_signalling._secured = True` unless
+`TINA4_RTC_REQUIRE_AUTH=false`). A secured upgrade needs a valid JWT in the `Authorization: Bearer`
+header, the `bearer` subprotocol (`Sec-WebSocket-Protocol: bearer, <jwt>`), or `?token=<jwt>`.
+**This is the framework's websocket handler convention**
 (`Router.websocket`):
 
 ```python
@@ -313,11 +318,15 @@ Tables are created on demand at mount time via each model's engine-aware `create
   failure only resurfaces at query time. Bind a DB (`bind_database(db)` / `TINA4_DATABASE_URL`)
   **before** calling `realtime(features=[…])` or chat/history/files will error per-request while the
   app appears healthy.
-- **The signalling WS (`/ws/rtc/{room}`) is PUBLIC** — `rtc_signalling` is not marked `_secured`, so
-  anyone can join any room and receive relayed signalling frames. Only the **chat** WS is
-  JWT-secured. Gate call access at the app layer if you need it.
-- **The config endpoint (`/api/rtc/config`) is PUBLIC** and returns your ICE/TURN config, including
-  freshly-minted ephemeral TURN credentials.
+- **The signalling WS (`/ws/rtc/{room}`) and the config endpoint (`/api/rtc/config`) require a
+  valid token by default** (ADR-0101). The config route mints ephemeral TURN credentials and the
+  socket relays calls, so both are secured. A client that does not send a token gets 401 on the
+  config fetch and a refused upgrade on the socket. Send the token; do not open the routes to make
+  the error go away.
+- **Anonymous calling is an explicit opt-out:** `TINA4_RTC_REQUIRE_AUTH=false` (or `0` / `no` /
+  `off`) in `.env`, read when `realtime()` runs. Then anyone can fetch TURN credentials and join any
+  room, so only use it when that is the intent. Signalling auth is per-socket, not per-room: a valid
+  token can join any room, so gate room membership at the app layer if calls are private.
 - **WS handler signature is `(connection, event, data)`** — event is `"open"`/`"message"`/`"close"`,
   data is `str` on message and `None` on open/close. This is the framework convention
   (`Router.websocket`), NOT `(connection, data, event)`.

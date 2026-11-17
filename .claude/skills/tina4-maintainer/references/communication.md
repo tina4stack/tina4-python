@@ -14,7 +14,7 @@ Tina4 code must include visual status dashboards. Don't narrate — show.
 - **Write plain English for a global team.** Most Tina4 engineers do not speak English first. Write so they understand on the first read: short common words, short sentences, one idea per sentence. No idioms, no slang, no metaphors. Spell out an acronym the first time you use it. Say the plain word, not the clever one.
 - **Keep it short.** Give the answer, the code, or the dashboard first, then stop. Stay under about 150 words unless a report, audit, or walkthrough was asked for. Use bullets and tables. Skip the preamble, the recap, and the "I'll now ..." lines.
 - **Match the effort to the task.** Take the first rung of the reuse ladder that holds. Do not build more than was asked. A small task gets a small answer and a short thought; do not over-think it.
-- **Ask before you guess - but only when you are blocked.** Default: decide from the source, the ADRs, and these skills, and keep working. When the choice is genuinely the owner's (a cross-framework contract change, a trade-off, a breaking change), ask at most 3 questions as short pick-one options BEFORE writing code or text. Never a wall of questions, and never after you have already guessed.
+- **Decide and proceed; ask only when a wrong guess is expensive and hard to reverse** (the floor's rule in `SKILL.md`). Default: decide from the source, the ADRs, and these skills, state the choice, and keep working - a cheap, reversible call is surfaced, not asked. Ask first only for an expensive, hard-to-reverse call (a breaking cross-framework contract change, a destructive migration, an irreversible external action): then at most 3 questions as short pick-one options BEFORE writing code or text. Never a wall of questions, and never after you have already guessed. A release is not one of these once the maintainer has said to ship: that instruction is the go-ahead.
 - **Short means a short reply, not less rigor.** Still verify against the source tree and the live API index (`api_search` / `api_method`) before you answer - brevity is about the words, not the checking.
 
 ### Status Dashboards
@@ -65,30 +65,31 @@ The user should never have to ask "what's the status?" — you should have alrea
 
 ### Branch Awareness in Every Response
 
-When discussing any work on Tina4, always clarify which branch context applies:
-- **`development`** — local work, feature branches, day-to-day coding
-- **`staging` (v3 beta)** — integration testing, pre-production
-- **`main` (v2 production)** — stable, backwards-compatible fixes only
+When discussing any work on Tina4, state the branch context. There is no development or
+staging branch:
+- **The four frameworks** — feature branch → PR → `v3` (the release line and GitHub default
+  branch). A tag on `v3` publishes.
+- **`tina4` (CLI) and `tina4-documentation`** — feature branch → PR → `main`.
 
-If the user doesn't specify, ask. If the context is obvious (e.g., porting a new feature),
-state it explicitly: "This targets the development branch for v3." Never leave branch
-context ambiguous.
+The repo's release line answers "which branch", so do not ask; say it: "This goes feature
+branch → PR → `v3`." Never leave branch context ambiguous. (Full model:
+`references/workflow-and-release.md`.)
 
 ### Referencing files and plans so the link resolves
 
 The harness turns a file path in your reply into a clickable link **relative to the
-session working directory** — for Tina4 work that is the multi-repo root
-(`~/IdeaProjects`), NOT the repo you happen to be editing. A bare repo-relative path
-like `plan/pdo-silent-fallback.md` or `src/orm/model.py` therefore resolves to
-`~/IdeaProjects/plan/…` and 404s when the maintainer clicks it — the exact reason
-plan links "don't open."
+session working directory** — for Tina4 work that is usually the session's working root
+(the multi-repo folder that holds the sibling repos; its path differs per machine), NOT the
+repo you happen to be editing. A bare repo-relative path like `plan/pdo-silent-fallback.md`
+or `src/orm/model.py` therefore resolves to `<working-root>/plan/…` and 404s when the
+maintainer clicks it — the exact reason plan links "don't open."
 
 **Always reference a plan or source file by its path FROM the working root:** prefix the
 repo (and add `:line` where it helps), or use an absolute path. Never emit a bare
 `plan/…`, `src/…`, `Tina4/…`, `lib/…`, `tina4_python/…`, or `packages/…` link.
 
 ```
-BAD  (resolves to ~/IdeaProjects/plan/foo.md → 404):   [plan](plan/pdo-silent-fallback.md)
+BAD  (resolves to <working-root>/plan/foo.md → 404):   [plan](plan/pdo-silent-fallback.md)
 GOOD (repo-prefixed, resolves from the root):          [plan](tina4-php/plan/pdo-silent-fallback.md)
 GOOD (with a line anchor):                             [count()](tina4-php/Tina4/ORM.php:962)
 GOOD (absolute, always resolves):                      tina4-documentation/plan/v3/01-FEATURE-MATRIX.md

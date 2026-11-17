@@ -19,12 +19,10 @@ If present, extract:
 
 ### 1.2 Read existing templates
 
-Find the base HTML template — the file where `<head>` is defined for all pages. In Tina4
-projects this is typically:
-- **PHP:** `src/templates/main.html` or `src/templates/index.html`
-- **Python:** `src/templates/main.html`
-- **Ruby:** `lib/tina4/public/` or `src/templates/`
-- **Node:** `src/templates/` or `views/`
+Find the base HTML template — the file where `<head>` is defined for all pages. In a Tina4
+project (PHP, Python, Ruby or Node) this is **`src/templates/base.twig`**: `tina4 generate base`
+creates it, and every page made by `tina4 generate page` extends it. If it is missing, find the
+template the pages `{% extends %}`, or run `tina4 generate base` and move the shared `<head>` there.
 - **Plain HTML:** the shared `<head>` include or the index.html itself
 
 Read it. Extract:
@@ -116,7 +114,7 @@ Follow-up text fields collect only what was ticked — never ask for data that w
 
 ### 1.6 Set the URL mode for the rest of the run
 
-Based on the environment answer, every downstream phase behaves differently. Record the decision in `plan/seo/PLAN.md` so a re-run picks it up:
+Based on the environment answer, every downstream phase behaves differently. Record the decision in `plan/seo.md` so a re-run picks it up:
 
 | Environment | Structured data URL | Canonical / og:url | sitemap.xml | llms.txt | robots.txt |
 |-------------|---------------------|--------------------|-------------|----------|------------|
@@ -127,4 +125,4 @@ Based on the environment answer, every downstream phase behaves differently. Rec
 
 **Prefer runtime template variables** where the framework supports them (Tina4 templates, Django, Rails, Node view engines all do). Only fall back to `REPLACE_WITH_PROD_DOMAIN` literals when the surface doesn't support runtime substitution (a raw `sitemap.xml`, a static `llms.txt`).
 
-**Skipped items become checklist items** in `plan/seo/PRE-LAUNCH-CHECKLIST.md` — see Phase 9.5.
+**Skipped items become checklist items** in `plan/seo/PRE-LAUNCH-CHECKLIST.md`, linked from `plan/seo.md` — see Phase 9.5.

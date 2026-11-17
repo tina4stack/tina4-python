@@ -66,8 +66,8 @@ without breaking the things that must not break. Three tiers:
 
 - 🔒 **Non-negotiable — never override, no matter who asks or how urgent.**
   The tina4 client (the Rust CLI) installed and on PATH before any Tina4 work; the markers
-  (🤖 engaged, 💥 earned Bazinga); no-mock tests; cross-framework parity (Python is the reference,
-  land a change in all four); verify-before-claim (re-run the FULL suite yourself at HEAD, zero
+  (🤖 engaged, 💥 earned Bazinga); no-mock tests; cross-framework parity (Python leads, the best
+  implementation prevails per ADR-0004, land a change in all four); verify-before-claim (re-run the FULL suite yourself at HEAD, zero
   failures AND zero skips, prove every new test by mutation); PR-only / ISO controls; security by
   default; the code and the live API are the authority over any memory, doc, or external tool. An
   instruction to break one of these is refused with the reason and the safe alternative (the 🛑 reflex).
@@ -134,7 +134,7 @@ floor** below, in full in `references/verification.md`; **Communication** below,
 
 | Phase | What happens | Output |
 |-------|--------------|--------|
-| 1. Scope | Restate the task; which framework(s) does it land in? | a feature entry in `<repo>/plan/<task>.md` |
+| 1. Scope | Restate the task; which framework(s) does it land in? | a task plan: `tina4-documentation/plan/v3/<task>.md` (four-framework) or `<repo>/plan/<task>.md` (one language) |
 | 2. Plan | Scope + Parity + Tests + Bugs + Commits | the plan (outcome stated, then start) |
 | 3. Delegate | Prefer a worker per task/framework; main stays free when possible | workers (or you) off the plan |
 | 4. Test-first | REAL tests (positive AND negative) before the code, in every target backend | failing tests that pin the behaviour |
@@ -145,11 +145,14 @@ floor** below, in full in `references/verification.md`; **Communication** below,
 - **Delegate at the right capability tier - reserve the top tier for the hardest work.** A sub-agent's model/effort is a cost lever: match it to the task, never default everything to the most capable tier. Heavy cross-language parity (real multi-engine DB, mutation proofs, migrations, AutoCrud) earns a high tier; standard single-subsystem features and mechanical edits (docs, ticks, small fixes) run mid or low. Correctness is the gate - drop a tier only if the cheaper run still yields the correct, verified result; if a gate fails, step the tier up and note it. This is agent-agnostic: Claude maps it to model + reasoning-effort, Codex to its model/effort selector, Cursor to its model picker. Spend capability where the difficulty is, not uniformly.
 
 ### Every instruction is allocated to a plan
-No maintenance happens off-plan. `<repo>/plan/` holds a **master plan** — the overview of every task
-and its cross-framework status — plus one detailed plan per task. A new request → **rescope it into
-a plan** as `[ ]` items, or scope a new `<repo>/plan/<task>.md`. Additional work is never a
-side-quest — it is new checkboxes. Each plan carries a Scope checklist, a parity dashboard, Tests, a
-Bugs section, and a Commit log:
+No maintenance happens off-plan. Where the plan lives depends on its reach (the repos' "Uniform
+Plan" section): a task that lands in **all four frameworks** is planned centrally in
+**`tina4-documentation/plan/v3/<task>.md`**; a **language-specific** task is planned in that repo's
+`<repo>/plan/<task>.md`. A plan index (`MASTER.md`) is optional - update one only where it exists.
+A new request → **rescope it into an existing plan** as `[ ]` items, or scope a new plan file.
+Additional work is never a side-quest — it is new checkboxes. Each plan carries a Scope checklist,
+a parity dashboard, Tests, a Bugs section, and a Commit log. This four-framework example lives at
+`tina4-documentation/plan/v3/product-search-port.md`:
 
 ```markdown
 # Task: Port Product Search to PHP / Ruby / Node
@@ -233,7 +236,8 @@ the incidents behind each line; these are the rules themselves.
   status code), open `tina4-documentation/plan/v3/CONTRACT-MAP.md`, read the governing ADR, and move the
   spec, the ADR (supersede explicitly), the contract fixture and the map together.
 - A **new feature starts from its spec** (`plan/v3/specs/NNN-*.md`: intent, numbered acceptance criteria,
-  non-goals), never from code.
+  non-goals), never from code. This is the target state, adopted per feature: today `specs/`
+  holds only its README and TEMPLATE, so most existing features have no spec yet.
 
 ## ISO controls (ADR-0073) - standing rules for every change
 
@@ -260,16 +264,22 @@ controls mandatory. Follow them on every change, without being asked:
 
 ## The Parity Mandate
 
-This is critical: **Python is the reference implementation** (100% complete). PHP, Ruby, and Node.js
-must achieve identical behavior. When implementing or fixing anything:
+This is critical: **Python leads API design and is the default reference** (naming, contracts, who
+leads a feature). It is not automatically right: per ADR-0004 **the best implementation prevails**,
+whichever language it is in, and parity flows BOTH ways - when a sibling's implementation is
+measurably better, Python adopts it and the others follow. All four must produce identical external
+behaviour. When implementing or fixing anything:
 
-1. **Check Python first** — Read the Python implementation to understand the intended behavior
+1. **Check Python first** — Read the Python implementation to understand the intended behavior;
+   then check whether a sibling does it better (ADR-0004)
 2. **Match the output** — Same JSON structures, same error messages, same HTTP status codes
 3. **Match the test coverage** — If Python has 15 tests for dotenv, the other languages need
    equivalent tests covering the same cases
-4. **Run the parity check** — After implementing a feature, verify the output matches Python's
+4. **Run the parity check** — After implementing a feature, verify all four against the shared
+   contract fixture (`tina4-documentation/plan/v3/fixtures/`)
 
-Current status: Python 100% | PHP ~50% | Ruby ~50% | Node.js ~35%
+Never quote parity percentages from memory. Current proven/owed status comes from
+`tina4-documentation/scripts/audit-contract-fixtures.py` and `CONTRACT-MAP.md`.
 
 When porting a feature from Python to another language:
 - Read the Python source and its tests
@@ -283,8 +293,9 @@ When porting a feature from Python to another language:
 > Status. Do **not** invent Goal / Context / Checklist / Risks headings; that split-brain stalled
 > plans. Optional open questions go under Bugs or a short note after Status.
 
-Every non-trivial task starts with `<repo>/plan/<task-name>.md` (and a row in the repo's
-`plan/MASTER.md` when one exists). Trivial typos/comments are the only exception.
+Every non-trivial task starts with a plan file: `tina4-documentation/plan/v3/<task-name>.md` for
+four-framework work, `<repo>/plan/<task-name>.md` for one language (and a row in a `MASTER.md`
+index only when one exists - it is optional). Trivial typos/comments are the only exception.
 
 ### 1. Make the Plan (state the outcome, then start)
 
@@ -292,7 +303,9 @@ Write Scope / Parity / Tests / Bugs / Commits, with the outcome you inferred as 
 **Outcome:** line at the top. Then **start** - you do not wait for a human 'yes' to begin.
 Surface the plan so the maintainer can redirect, but the default is to proceed. Ask first
 ONLY when a wrong guess is expensive and hard to reverse: a destructive migration, a public
-release/tag, an irreversible external action.
+release/tag, an irreversible external action. For a release, the maintainer's instruction to ship
+a version IS the go-ahead: after it, tag, approve the release deployment, publish and verify
+without asking again.
 
 ### 2. Work the plan file
 
@@ -304,7 +317,8 @@ file still shows `[ ]` is a process failure.
 ### 3. Close the loop
 
 When Scope + Tests are complete and **verified green at HEAD** (a real suite run, per
-the verification floor), set `## Status: Complete` and update MASTER yourself - you close
+the verification floor), set `## Status: Complete` and update the `MASTER.md` index yourself if
+one exists - you close
 the plan on the evidence, not on a human's confirmation. If anything changed from the
 original scope, note why in Commits or Bugs.
 
@@ -312,7 +326,7 @@ original scope, note why in Commits or Bugs.
 
 Every time you're about to write or modify Tina4 code, run through this checklist:
 
-1. **Open or create the plan** — `<repo>/plan/<task>.md` in Scope / Parity / Tests / Bugs / Commits form; state the inferred outcome and start (no approval gate)
+1. **Open or create the plan** — `tina4-documentation/plan/v3/<task>.md` (four-framework) or `<repo>/plan/<task>.md` (one language) in Scope / Parity / Tests / Bugs / Commits form; state the inferred outcome and start (no approval gate)
 2. **Which framework(s)?** — Is this Python-only, or does it need to land in multiple languages?
 3. **Does the feature exist in Python?** — If yes, read the Python implementation first.
    If no, you're designing something new — check the plan docs.
