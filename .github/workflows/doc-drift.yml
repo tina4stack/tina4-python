@@ -37,6 +37,16 @@ jobs:
         working-directory: tina4-python
         run: sh scripts/check-no-symlinks.sh
 
+      # llms.txt must follow the llmstxt.org spec (H1, > summary, no headings in
+      # the free-form zone, H2 sections that hold only '- [name](url): notes'
+      # links). Zero-dependency stdlib Python; the self-test proves the gate
+      # rejects known-bad files before its verdict on the real one is trusted.
+      - name: llms.txt follows the llmstxt.org spec
+        working-directory: tina4-python
+        run: |
+          python3 scripts/check_llms_txt.py --self-test
+          python3 scripts/check_llms_txt.py llms.txt
+
       # The tina4-js skill's imports are checked against tina4-js's real exports,
       # so the sibling repo must sit beside this one (../tina4-js).
       - name: Checkout tina4-js (sibling, for its real exports)

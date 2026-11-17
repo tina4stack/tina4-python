@@ -1,209 +1,63 @@
-# tina4-python — LLM Context
+# Tina4 Python
 
-Tina4 Python v3.13.89 — 140 cataloged features, zero dependencies. Web framework for Python 3.12+. Routes, ORM, templates, auth, queue, websocket, graphql, WSDL — all built in.
+> Tina4 Python (`tina4-python` on PyPI) is a web framework for Python 3.12+ with zero runtime dependencies: routing, ORM, Frond (Twig-compatible) templates, JWT auth, sessions, queues, WebSocket, GraphQL, WSDL/SOAP and Swagger are all built in, and database drivers are optional extras. It is one of four Tina4 backends (Python, PHP, Ruby, Node.js) that share the same project layout, CLI, template syntax and `.env` variables.
 
----
+Quick start. Install the Rust `tina4` CLI (`curl -fsSL https://tina4.com/install.sh | sh`, `brew install tina4stack/tap/tina4`, or `irm https://tina4.com/install.ps1 | iex` on Windows), then:
 
-## Quick Start
+```bash
+tina4 init python my-app   # the path is required; creates .venv and installs tina4-python
+cd my-app
+tina4 serve                # http://localhost:7146 (TINA4_PORT overrides)
+```
+
+Add a route by dropping a file in `src/routes/` (auto-discovered):
 
 ```python
-from tina4_python.core import run
-run()  # starts server on port 7145
+from tina4_python.core.router import get
+
+@get("/api/hello/{name}")
+async def hello(name, request, response):
+    return response({"message": f"Hello, {name}!"})
 ```
 
----
+Gotchas an agent most needs:
 
-## Router
+- GET routes are public; POST, PUT, PATCH and DELETE require a bearer token by default. Use `@noauth()` to open a write route and `@secured()` to protect a GET. Decorator order, outermost first: `@noauth`/`@secured`, then `@description`/`@tags`, then the route decorator.
+- Path parameters arrive as handler arguments whose names match the `{placeholders}` (Python only; the other Tina4 backends read `request.params`).
+- `response(data, status)` returns JSON for a dict; `response.json(...)` and `response.render("page.twig", data)` also exist.
+- In an `async def` handler, call the `_async` twin of every database and ORM call (`await db.fetch_one_async(...)`, `await user.save_async()`); a plain `def` handler runs in a worker thread and may use the sync calls.
+- ORM columns are field objects from `tina4_python.orm` (`IntegerField`, `StringField`, ...). The table name defaults to the lowercase class name; set `table_name` or `TINA4_ORM_PLURAL_TABLE_NAMES=true`.
+- The database comes from `TINA4_DATABASE_URL` (`sqlite:///`, `postgresql://`, `mysql://`, `mssql://`, `firebird://`). Change schema only through SQL files in `migrations/`, never in route code.
+- The package's own CLI is `tina4python` (not `tina4py`); the `tina4` CLI forwards `tina4 generate <model|route|crud|migration|...>` to it. Generated write routes are secure by default.
 
-```python
-from tina4_python.core.router import get, post, put, patch, delete, noauth, secured, cached, template
+## Docs
 
-@get("/api/users")
-async def get_users(request, response):
-    return response({"users": []})
+- [Quick reference](https://tina4.com/python/index.md): one-page cheat sheet of every feature
+- [Getting started](https://tina4.com/python/01-getting-started.md): install, scaffold, project layout, first route
+- [Routing](https://tina4.com/python/02-routing.md): methods, path parameters, route groups, auth decorators, wildcards
+- [Request and response](https://tina4.com/python/03-request-response.md): request fields, response helpers, status codes, validation, uploads
+- [Templates](https://tina4.com/python/04-templates.md): Frond template engine, filters, inheritance
+- [Database](https://tina4.com/python/05-database.md): configuration, parameterised queries, transactions, migrations, seeding
+- [ORM](https://tina4.com/python/06-orm.md): models, CRUD, relationships, eager loading, soft delete, auto-CRUD
+- [Authentication](https://tina4.com/python/08-authentication.md): JWT tokens, password hashing, login flow, protecting routes, CSRF
+- [Middleware and security](https://tina4.com/python/10-middleware-security.md): the middleware pipeline, built-in and custom middleware
+- [Queues](https://tina4.com/python/12-queues.md): producers, consumers, retries, dead letters, backends
+- [Scaffolding](https://tina4.com/python/19-scaffolding.md): `tina4 generate` generators
+- [CLI](https://tina4.com/python/31-cli.md): every `tina4` and `tina4python` command
+- [Environment variables](https://tina4.com/python/33-environment-variables.md): the `.env` reference
+- [Deployment](https://tina4.com/python/34-deployment.md): production config, Docker, health checks, reverse proxy, scaling
+- [Release notes](https://tina4.com/python/36-releases.md): what changed in each release
+- [Upgrading from v2](https://tina4.com/python/37-upgrading-from-v2.md): migration guide from Tina4 Python v2
 
-@post("/api/users")
-@noauth()  # make write route public (auth required by default on POST/PUT/DELETE)
-async def create_user(request, response):
-    body = request.body
-    return response({"created": body["name"]}, 201)
+## Repository
 
-@get("/api/users/{id}")
-async def get_user(request, response):
-    user_id = request.params["id"]
-    return response({"id": user_id})
-```
+- [CLAUDE.md](https://raw.githubusercontent.com/tina4stack/tina4-python/v3/CLAUDE.md): maintainer guide to this codebase
+- [Packaged CLAUDE.md](https://raw.githubusercontent.com/tina4stack/tina4-python/v3/tina4_python/CLAUDE.md): app-developer guide shipped inside the package
+- [AGENTS.md](https://raw.githubusercontent.com/tina4stack/tina4-python/v3/AGENTS.md): instructions for coding agents
+- [CHANGELOG.md](https://raw.githubusercontent.com/tina4stack/tina4-python/v3/CHANGELOG.md): release history
 
-Decorator order (outermost to innermost): `@noauth`/`@secured` -> `@description`/`@tags` -> `@get`/`@post`
+## Optional
 
-Wildcard routes: `@get("/api/files/*")`
-
-Template rendering: `@template("page.twig")` auto-renders dict return.
-
----
-
-## Database
-
-```python
-from tina4_python.database import Database
-
-db = Database("sqlite:///app.db")  # or postgres://, mysql://, mssql://, firebird://
-result = db.fetch("SELECT * FROM users WHERE active = ?", [True], limit=10, offset=0)
-row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
-db.execute("INSERT INTO users (name) VALUES (?)", ["Alice"])
-db.insert("users", {"name": "Alice"})
-db.update("users", {"id": 1, "name": "Bob"})
-db.delete("users", {"id": 1})
-next_id = db.get_next_id("users")  # race-safe atomic ID generation
-
-# async def routes: await the _async twin of every call (ADR-0074) - never the sync call
-row = await db.fetch_one_async("SELECT * FROM users WHERE id = ?", [1])
-user = await User.find_by_id_async(1); await user.save_async()
-async with db.transaction_async():
-    await db.insert_async("users", {"name": "Eve"})
-# plain def routes may use the sync calls (they run in a worker thread)
-# Database is a bounded pool: TINA4_DB_POOL (default 10), TINA4_DB_POOL_TIMEOUT (30s)
-```
-
----
-
-## ORM
-
-```python
-from tina4_python.orm import ORM, orm_bind, IntegerField, StringField
-
-class User(ORM):
-    id = IntegerField(primary_key=True, auto_increment=True)
-    name = StringField()
-
-orm_bind(db)  # bind database to all ORM subclasses
-
-user = User({"name": "Alice"})
-user.save()
-user.load("id = ?", [1])
-user.delete()
-result = user.select(filter="active = ?", params=[True], order_by="name", limit=10, offset=0)
-user.to_dict()
-user.to_json()
-```
-
----
-
-## Frond (Templates)
-
-```python
-from tina4_python.frond import Frond
-html = Frond.render("page.twig", {"title": "Home", "items": items})
-```
-
----
-
-## Auth
-
-```python
-from tina4_python.auth import Auth
-token = Auth.get_token({"user_id": 1, "role": "admin"})
-payload = Auth.valid_token(token)  # returns dict or None
-hashed = Auth.hash_password("secret")
-valid = Auth.check_password("secret", hashed)
-```
-
----
-
-## Queue
-
-```python
-from tina4_python.queue import Queue
-queue = Queue(topic="emails", max_retries=3)
-queue.push({"to": "alice@example.com", "subject": "Hello"})
-for job in queue.consume("emails"):
-    process(job.payload)
-    job.complete()  # or job.fail("reason")
-queue.produce("other_topic", {"data": "value"})
-dead = queue.dead_letters()
-```
-
----
-
-## API Client
-
-```python
-from tina4_python.api import Api
-api = Api(base_url="https://api.example.com")
-result = api.get("/users")  # returns {"http_code": 200, "body": {...}}
-api.post("/users", {"name": "Alice"})
-api.set_bearer_token("token123")
-```
-
----
-
-## WebSocket
-
-```python
-from tina4_python.websocket import WebSocketServer
-# Server-side websocket — integrated with the Tina4 server
-# Clients connect to ws://localhost:7145/ws/topic
-```
-
----
-
-## Events
-
-```python
-from tina4_python.core.events import on, emit, once, off
-
-@on("user.created")
-def welcome(user):
-    print(f"Welcome {user['name']}")
-
-emit("user.created", {"name": "Alice"})
-```
-
----
-
-## Migrations
-
-```python
-from tina4_python.migration import migrate, create_migration
-migrate(db)
-create_migration("add users table")
-```
-
----
-
-## Project Structure
-
-```
-src/
-  routes/       # Auto-discovered route files
-  orm/          # ORM model definitions
-  templates/    # Frond/Twig templates
-  public/       # Static files served at /
-  app/          # Shared helpers and services
-migrations/     # SQL migration files
-tests/          # pytest test files
-.env            # Environment variables
-```
-
----
-
-## Known Gotchas
-
-1. Routes return `response()` not `response.json()` — Tina4 convention
-2. POST/PUT/DELETE require auth by default. Use `@noauth()` to make public
-3. GET is public by default. Use `@secured()` to protect
-4. Decorator order matters: `@noauth`/`@secured` outermost, then `@description`/`@tags`, then `@get`/`@post` innermost
-5. ORM uses `to_dict()` not `to_json()` for dict output
-6. Queue job payload accessed via `job.payload` not `job.data`
-7. Database `fetch()` uses `offset=` not `skip=`
-8. Import from `tina4_python.core.router` not `tina4_python.router`
-9. Server entry point: `from tina4_python.core import run; run()`
-10. Default port: 7145
-11. ORM defaults table name to lowercase class name (`Contact` → `contact`). Set `ORM_PLURAL_TABLE_NAMES=true` in `.env` to append "s"
-
-## Scaffolding (`tina4py generate`)
-Scaffold boilerplate instead of hand-writing it: `tina4py generate <feature>` for model, route, crud,
-migration, service, queue, validator, seeder, websocket, listener, form, view, auth. Generated write
-routes are secure by default (token-gated; pass `--public` to open them); reads are public. Logic
-stubs carry an AI-FILL fill-spec placeholder (Intent/Given/Use/Return/Ground + a loud not-implemented
-throw) — fill only that; working CRUD carries a lighter EXTEND marker.
+- [Tina4 site map](https://tina4.com/llms.txt): llms.txt for all of tina4.com, every language
+- [Tina4 full docs](https://tina4.com/llms-full.txt): the whole documentation in one file
+- [Feature list](https://tina4.com/python/38-feature-list.md): the full cataloged feature inventory
