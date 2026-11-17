@@ -29,8 +29,8 @@ from tina4_python.core.router import get, post, noauth, secured
 async def list_users(request, response):
     return response({"users": []})
 
-@post("/api/users")
 @noauth()
+@post("/api/users")
 async def create_user(request, response):
     return response({"created": request.body["name"]}, 201)
 ```
@@ -68,7 +68,7 @@ tests/         — pytest tests
 ## CLI
 
 ```bash
-tina4python serve       # Dev server on port 7145
+tina4python serve       # Dev server on port 7146
 tina4python migrate     # Run migrations
 tina4python test        # Run tests
 tina4python routes      # List routes

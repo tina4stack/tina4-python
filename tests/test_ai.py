@@ -183,3 +183,41 @@ class TestGenerateContext:
             arg = ast.parse(call, mode="eval").body
             first = arg.elts[0] if isinstance(arg, ast.Tuple) else arg
             assert not isinstance(first, ast.Set), f"{tool}: response({call}) passes a set"
+
+
+class TestGeneratedContextMatchesCode:
+    """The context files `tina4 ai` writes into a user's project must state what
+    the code does. Real files are generated into a temp project and read back."""
+
+    _ROUTE_TOOLS = [t["name"] for t in AI_TOOLS if t["name"] != "claude-code"]
+
+    def test_codex_agents_md_names_the_real_default_port(self, tmp_path, monkeypatch):
+        import re
+        from tina4_python.core.server import resolve_config
+
+        monkeypatch.delenv("TINA4_PORT", raising=False)
+        monkeypatch.delenv("PORT", raising=False)
+        default_port = resolve_config()[1]
+
+        install_context(str(tmp_path), tools=["codex"])
+        text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+
+        match = re.search(r"tina4python serve\s+# Dev server on port (\d+)", text)
+        assert match, "AGENTS.md no longer documents `tina4python serve`"
+        assert int(match.group(1)) == default_port
+        # 7145 is the PHP port; Python must never advertise it.
+        assert "port 7145" not in text
+
+    @pytest.mark.parametrize("tool", _ROUTE_TOOLS)
+    def test_route_example_puts_noauth_above_the_route(self, tool, tmp_path):
+        """Every generated file states the order @noauth/@secured outermost,
+        @get/@post innermost; its route example must follow that order."""
+        install_context(str(tmp_path), tools=[tool])
+        context_file = next(t["context_file"] for t in AI_TOOLS if t["name"] == tool)
+        lines = (tmp_path / context_file).read_text(encoding="utf-8").splitlines()
+
+        post_at = lines.index('@post("/api/users")')
+        assert lines[post_at - 1] == "@noauth()", (
+            f"{tool}: @noauth() must sit directly above @post, got {lines[post_at - 1]!r}"
+        )
+        assert "@noauth()" not in lines[post_at + 1:post_at + 2]

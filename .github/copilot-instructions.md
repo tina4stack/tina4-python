@@ -11,8 +11,8 @@ from tina4_python.core.router import get, post, noauth
 async def list_users(request, response):
     return response({"users": []})
 
-@post("/api/users")
 @noauth()
+@post("/api/users")
 async def create(request, response):
     return response({"created": request.body["name"]}, 201)
 ```
@@ -27,4 +27,4 @@ async def create(request, response):
 - Database: `offset=` not `skip=`
 - Decorator order: `@noauth` outermost, `@get`/`@post` innermost
 
-See llms.txt for full API reference.
+For the complete API reference, read `CLAUDE.md` in this repo and the docs it links. `llms.txt` is the link index (llmstxt.org format); https://tina4.com/llms-full.txt has the full documentation in one file.
