@@ -87,7 +87,9 @@ def get_framework_frond():
     # Sync custom filters/globals from the user engine
     if _framework_frond is not None:
         user_engine = get_frond()
-        _framework_frond._filters.update(user_engine._filters)
+        # Instance filters only: class filters already reach every engine.
+        for name, fn in user_engine._local_filters.items():
+            _framework_frond.add_filter(name, fn)
         # Only the user engine's own (instance) globals: class globals are
         # already live on every engine, so copying them would freeze them.
         _framework_frond._globals.maps[0].update(user_engine._globals.maps[0])

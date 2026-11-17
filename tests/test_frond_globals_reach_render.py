@@ -4,13 +4,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-# A template global registered through the public class API reaches every page
-# that response.render() produces, whenever it is registered.
+# A template global, filter or test registered through the public class API
+# reaches every page that response.render() produces, whenever it is registered
+# (ADR-0106 for globals, ADR-0107 for filters and tests).
 #
 # The response engine used to copy the class globals once, when it was built
 # at the first render, so a Frond.add_global() made after that first render
 # never reached a page. The auto-wired t() also refused a params map, the shape
-# templates use: {{ t("welcome", {"name": n}) }}. Every case renders a real
+# templates use: {{ t("welcome", {"name": n}) }}. Filters and tests were
+# drained into the engine the same way, once, at construction. Every case renders a real
 # template through a real route and the real front controller.
 import json
 
@@ -29,6 +31,8 @@ def _app(tmp_path, monkeypatch):
     templates.mkdir(parents=True)
     (templates / "globals.twig").write_text("[{{ early }}][{{ late }}][{{ shared }}]")
     (templates / "call.twig").write_text('{{ shout("hi") }}')
+    (templates / "filter.twig").write_text('{{ "hi"|loud }}')
+    (templates / "test.twig").write_text("{% if 4 is quad %}yes{% else %}no{% endif %}")
     (templates / "flag.twig").write_text("{% if is_admin %}admin{% else %}guest{% endif %}")
     (templates / "greeting.twig").write_text('{{ t("greeting") }}')
     (templates / "welcome.twig").write_text('{{ t("welcome", {"name": "Ana"}) }}')
@@ -43,7 +47,7 @@ def _app(tmp_path, monkeypatch):
     Frond.clear_registry()
     set_frond(None)  # the next response.render builds a fresh engine
 
-    for name in ("globals", "flag", "call", "greeting", "welcome"):
+    for name in ("globals", "flag", "call", "filter", "test", "greeting", "welcome"):
         def handler_for(template):
             async def handler(request, response):
                 return response.render(template, {})
@@ -112,3 +116,45 @@ class TestFrondGlobalsReachRender:
         get_frond().add_global("shared", "instance")
         assert page("/globals") == "[][][instance]"
         assert Frond("src/templates").render("globals.twig") == "[][][class]"
+
+
+class TestFrondFiltersAndTestsReachRender:
+    def test_class_filter_registered_before_first_render_reaches_render(self):
+        Frond.add_filter("loud", lambda value: str(value).upper())
+        assert page("/filter") == "HI"
+
+    def test_class_filter_registered_after_first_render_reaches_render(self):
+        assert page("/filter") == "hi"  # the response engine now exists
+        Frond.add_filter("loud", lambda value: str(value).upper())
+        assert page("/filter") == "HI"
+
+    def test_class_test_registered_before_first_render_reaches_render(self):
+        Frond.add_test("quad", lambda value: value == 4)
+        assert page("/test") == "yes"
+
+    def test_class_test_registered_after_first_render_reaches_render(self):
+        assert page("/test") == "no"
+        Frond.add_test("quad", lambda value: value == 4)
+        assert page("/test") == "yes"
+
+    def test_instance_filter_on_another_engine_does_not_leak_into_render(self):
+        other_engine = Frond("src/templates")
+        other_engine.add_filter("loud", lambda value: "LEAK")
+        assert page("/filter") == "hi"
+        assert other_engine.render("filter.twig") == "LEAK"
+
+    def test_instance_test_on_another_engine_does_not_leak_into_render(self):
+        other_engine = Frond("src/templates")
+        other_engine.add_test("quad", lambda value: True)
+        assert page("/test") == "no"
+        assert other_engine.render("test.twig") == "yes"
+
+    def test_instance_filter_overrides_class_filter(self):
+        Frond.add_filter("loud", lambda value: "class")
+        assert page("/filter") == "class"
+        from tina4_python.core.response import get_frond
+        get_frond().add_filter("loud", lambda value: "instance")
+        assert page("/filter") == "instance"
+        Frond.add_filter("loud", lambda value: "class again")  # a later class change
+        assert page("/filter") == "instance"
+        assert Frond("src/templates").render("filter.twig") == "class again"
