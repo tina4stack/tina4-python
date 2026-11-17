@@ -670,9 +670,17 @@ def _auto_wire_i18n():
             default_locale=os.environ.get("TINA4_LOCALE", "en"),
         )
 
-        # Only register if t() hasn't been explicitly set by the user
+        # Templates call t("key") or t("key", {"name": n}): Frond passes a
+        # params map positionally, and I18n.t takes keyword placeholders, so
+        # the template global accepts both shapes and merges them.
+        def _template_t(key, params=None, **kwargs):
+            return i18n.t(key, **{**(params or {}), **kwargs})
+
+        # Only register if t() hasn't been explicitly set by the user. A class
+        # registration reaches every engine, response.render's included,
+        # whenever it is made.
         if "t" not in Frond._class_globals:
-            Frond._class_globals["t"] = i18n.t
+            Frond.add_global("t", _template_t)
             Log.info(f"i18n: auto-registered t() with {len(json_files)} locale(s)")
     except Exception as e:
         Log.error(f"i18n: auto-wire failed: {e}")
