@@ -95,11 +95,11 @@
     {
       "ecosystem": "pypi",
       "name": "dnspython",
-      "version": "2.9.1",
+      "version": "2.9.2",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "ISC",
-      "evidence": "https://pypi.org/pypi/dnspython/2.9.1/json"
+      "evidence": "https://pypi.org/pypi/dnspython/2.9.2/json"
     },
     {
       "ecosystem": "pypi",
