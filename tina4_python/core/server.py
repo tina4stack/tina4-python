@@ -4239,6 +4239,15 @@ def _check_legacy_env_vars() -> None:
     sys.exit(2)
 
 
+_URL_USERINFO = re.compile(r"://[^/\s@]*@")
+
+
+def _strip_url_credentials(text: str) -> str:
+    """``text`` with every URL's ``user:pass@`` removed - safe for a boot log."""
+    from tina4_python.database.database_url import redact_url
+    return _URL_USERINFO.sub("://", redact_url(text))
+
+
 def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
     """Apply pending DB migrations on startup — NON-BREAKING.
 
@@ -4267,11 +4276,25 @@ def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
         Log.debug("TINA4_AUTO_MIGRATE is off — skipping startup migrations")
         return
 
+    configured_url = os.environ.get("TINA4_DATABASE_URL", "").strip()
     try:
         from tina4_python.database import Database
         db = Database()  # resolves TINA4_DATABASE_URL (framework default if unset)
     except Exception as exc:
-        Log.debug(f"Startup migrations skipped (no database configured): {exc}")
+        # Only an unset TINA4_DATABASE_URL is "no database configured". A set
+        # but unreachable one must say so, or the operator chases a missing
+        # setting that is in fact present (review of tina4-ruby#172).
+        if configured_url:
+            Log.debug(
+                "Startup migrations skipped (database configured but could not "
+                f"connect to {_strip_url_credentials(configured_url)}): "
+                f"{_strip_url_credentials(str(exc))}"
+            )
+        else:
+            Log.debug(
+                "Startup migrations skipped (no database configured): "
+                f"{_strip_url_credentials(str(exc))}"
+            )
         return
 
     try:
