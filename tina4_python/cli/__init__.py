@@ -288,7 +288,7 @@ from tina4_python.core.port_takeover import (  # noqa: E402
 )
 
 
-def _kill_process_on_port(port: int) -> bool:
+def _kill_process_on_port(port: int, host: str | None = None) -> bool:
     """Reclaim *port* from a stale Tina4 dev server, only when it is safe.
 
     Routes through the shared identity-checked takeover (TAKEOVER-DEC-01/02):
@@ -297,9 +297,12 @@ def _kill_process_on_port(port: int) -> bool:
     printed; takeover is also skipped in a container, outside dev mode, and when
     opted out (`TINA4_NO_TAKEOVER` / `tina4 serve --no-kill`).
 
+    *host* is the address serve will bind; when given, a port that binds there
+    is reported as free instead of "in use".
+
     Returns True only when a Tina4 holder was actually signalled.
     """
-    result = take_over_port(port, dev=is_dev(), no_takeover=no_takeover_opted_out())
+    result = take_over_port(port, dev=is_dev(), no_takeover=no_takeover_opted_out(), host=host)
     if result.reclaimed:
         print(f"  ⚠ {result.message}")
         return True
@@ -864,7 +867,8 @@ def _serve(args):
 
     # Reclaim the port from a stale Tina4 dev server only (identity-checked).
     port = cli_port or int(os.environ.get("PORT", os.environ.get("TINA4_PORT", "7146")))
-    _kill_process_on_port(port)
+    from tina4_python.core.server import resolve_config
+    _kill_process_on_port(port, host=resolve_config(cli_host=cli_host, cli_port=port)[0])
 
     from tina4_python.core import run
     run(host=cli_host, port=cli_port, no_browser=no_browser, no_reload=no_reload)
