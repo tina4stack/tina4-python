@@ -9,6 +9,26 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.164 - 2026-11-17
+
+### Fixed
+
+- Class-level template globals, filters and tests (`Frond.add_global` / `add_filter` / `add_test`) now reach every page `response.render` produces, whether they are registered before or after the first render; before, the response engine copied them once and a later registration never reached a page. The auto-wired `t()` accepts a params map: `{{ t('welcome', {'name': n}) }}` (it raised `takes 2 positional arguments`). Instance-level registrations stay local to their engine (#324, #326; ADR-0106, ADR-0107; parity with tina4-php, tina4-ruby, tina4-nodejs).
+- `tina4python serve` no longer prints "Port N is in use; takeover is disabled outside dev mode" for a port nothing holds. Takeover was refused before anything checked for a holder; the CLI now tries the bind first, so a free port says nothing and a held port is still refused with the same message (#318, parity with tina4-php#362, tina4-ruby#173, tina4-nodejs#198).
+- A configured database that cannot be reached no longer logs "Startup migrations skipped (no database configured)". The message now says the database is configured but could not connect, names the URL without its credentials, and gives the error (#319).
+- `/__dev` memory figures report the process's current memory, not its peak, when psutil is not installed. Both `/__dev/api/status` and `/__dev/api/system` carried the peak resident set size, so a server that grew once kept showing its high-water mark. Measured against the kernel's own figures in a real process (#320, from #316 by a contributor).
+
+### Security
+
+- Optional extras no longer admit releases with published advisories: `cryptography>=50.0.0` (was `>=42.0`), `mysql-connector-python>=9.1.0` (was `>=9.0`), `pymongo>=4.18.3` (was `>=4.18.2`). The locked versions were never affected (#314).
+- dnspython 2.9.1 -> 2.9.2 (GHSA-vvf4-9x63-8xvv). A new `Dependency audit` workflow checks every `uv.lock` pin against the PyPI/OSV advisory database on dependency changes and weekly; it found this one on its first run (#317).
+
+### Changed
+
+- AI skills: the tina4-maintainer skill is split into an always-loaded floor plus on-demand references, with a debugging procedure and a merge gate; 70+ contradictions found by a skills audit are fixed against the code; every app-builder skill now forbids patching the framework to work around a bug (report it instead); tina4-js routing defaults to history mode, as the router does (#321, #325).
+- AI tool files: the default port is 7146 in `AGENTS.md`, `.cursorrules` and the generated codex context; `.cursorrules` / `copilot-instructions.md` point at `CLAUDE.md` for the full API, since `llms.txt` is now a link index (#323).
+- `llms.txt` follows the llmstxt.org specification: a summary, a short quick start, and link lists to the markdown docs; stale facts corrected; a CI check keeps it conformant (#322).
+
 ## 3.13.163 - 2026-11-13
 
 ### Fixed
