@@ -187,7 +187,7 @@ for repo in "$REPO_ROOT" "${SIBLINGS[@]/#/$PARENT/}"; do
       dir="$(dirname "$skillmd")"
       while IFS= read -r ref; do
         [ -e "$dir/$ref" ] || { echo "DANGLING [$ref]: $skillmd"; dangling=1; }
-      done < <(grep -o 'references/[A-Za-z0-9._-]*' "$skillmd" | sort -u)
+      done < <(grep -o 'references/[A-Za-z0-9._-][A-Za-z0-9._/-]*' "$skillmd" | sort -u)
     done < <(find "$repo/$tree/skills" -name SKILL.md -print0)
   done
 done

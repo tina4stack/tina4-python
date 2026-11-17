@@ -1,6 +1,6 @@
 ---
 name: tina4-developer-python
-updated_for_version: 3.13.105
+updated_for_version: 3.13.147
 description: >
   Use whenever a developer is building a Python application with the Tina4 framework
   (tina4-python). Trigger when the user wants to create routes, define ORM models, write Frond
@@ -22,6 +22,62 @@ it becomes JSON, POST a JSON body and it's automatically parsed, put a file in `
 it's a route.
 
 > 🤖 **Skill-active marker.** While this Tina4 skill is guiding your work, **begin every reply with the 🤖 emoji** so the developer can see at a glance that Tina4 conventions are engaged. Drop it only once the conversation has clearly moved off Tina4.
+
+## Contents
+
+Read top to bottom once; then jump by section. Deep detail lives in `references/` — load on demand.
+
+**Orientation**
+- Announce before you act · Detect if you are stale — how this skill keeps itself honest
+- The Tina4 Working Method — journeys, sibling skills, outcome-first, delegate, plan, tests-first, scaffold, verify, report
+- **Degrees of freedom** — what is inviolable vs. a default vs. your judgement (read this next)
+
+**Before you write code**
+- The reuse ladder · Retrieve the current API with `tina4_context` · Verify Against the Live API
+- The Tina4 AI Coder Rule Path · Quick Start · Lazy means less code, not a flimsier path
+
+**Choosing the shape**
+- Two Ways to Build — monolithic · API + reactive frontend · microservices + queues; the scaling guide; pick one, don't mix
+- The Golden Rules (incl. authentication — don't reach for `@noauth()`)
+
+**Running the project**
+- Language Version · Staying current (`tina4` updates) · Environment Configuration
+- Testing · Deployment · Plan First
+
+**Reference files** (`references/`, read on demand)
+- `routes-and-api.md` · `data-and-orm.md` · `templates-and-frontend.md` · `auth-and-services.md`
+- `realtime.md` · `web-push.md` · `deployment.md` · `ai-coder-rule-path.svg`
+
+## Degrees of freedom
+
+Not every line here carries the same weight. Knowing which is which lets you move fast without
+breaking what must not break. Three tiers:
+
+- 🔒 **Non-negotiable — never skip, however small the task.**
+  The **tina4 client (the Rust CLI) installed and on PATH before any work** — verify with
+  `tina4 --version`; it compiles SCSS, watches files and serves, so `python app.py` is never the way
+  (use `tina4 serve`). **Scaffold, never hand-roll** — `tina4 init` for a project, `tina4 generate
+  model|route|migration|middleware <name>` for pieces (the full flag set is in the `tina4-cli`
+  skill). **Use Tina4's built-ins** (Auth, ORM, Queue, Api, Cache, Sessions, Frond, GraphQL,
+  WebSocket) — don't add a dependency for what the framework ships. **Security by default** —
+  parameterised SQL, auto-escaped output, auth on write routes (don't reach for `@noauth()`),
+  `TINA4_SECRET` from env. **All schema changes via migrations.** **Real tests for your own code**
+  — no mocks against a real dependency. **The markers:** the 🤖 skill-active marker above, and
+  💥 **Bazinga!** on an EARNED win — your test suite goes green on a real dependency, a feature is
+  verified working end to end, a clean deploy lands — on its own line with a short geeky one-liner.
+  Never faked (no green run, no Bazinga) and never on a trivial step.
+
+- 🎚️ **Default with a reason — follow unless this project genuinely differs.**
+  The reuse ladder; the plan-driven workflow; one build shape per project (don't mix monolith /
+  reactive / microservices); the project conventions (one resource per file, no inline styles, CSS
+  variables, `base.twig` inheritance, constants not magic values, thin routes over a service layer).
+  Depart deliberately and say why — not by drift.
+
+- 🧭 **Judgement — read the task and choose.**
+  Which build shape fits; how much to scaffold vs. write by hand; how wide to cast a feature;
+  verbosity; ask-first vs. decide-and-proceed. The skill gives the heuristic; you read the situation.
+  (Note: cross-framework parity, framework releases and installer signing are NOT your concern here —
+  those live in the `tina4-maintainer` skill, for people building Tina4 itself.)
 
 ## Announce before you act
 
@@ -174,8 +230,11 @@ the developer can correct.
 ### 1. Keep the main session free — delegate to a worker
 When the developer gives an instruction, don't do the work inline. **Allocate it to a plan, then
 spawn a separate worker to execute it**, so the main session is always free for the next input.
-Tina4 **hot-reloads on save** (DevReload), so as the worker edits routes, models, and templates the
-developer watches the interface change **live in the browser** — keeping the main session open is
+Under `tina4 serve` the file watcher reloads on save: templates and static files refresh the browser,
+and an edited or NEW file under `src/` (routes, models) is re-imported through `POST /__dev/api/reload`
+with no restart. A bare `python app.py` has no watcher, so a route or model file added there needs a
+restart. The MCP `route_list` tool reads the live route registry, so it reflects a new file once the reload
+has run. As the worker edits, the developer watches the interface change **live in the browser** — keeping the main session open is
 what lets them observe and steer while the work happens. The main agent scopes, dispatches, and
 reports; workers build and update the plan. When a worker finishes an item, surface it to the
 developer. Whoever builds updates `plan/<feature>.md` in the **same turn** they claim progress:
@@ -188,6 +247,15 @@ No work happens off-plan. A new request that fits an existing feature → **resc
 plan** as new `[ ]` items. A genuinely new feature → **scope it and state the outcome**, then
 create `plan/<feature>.md` and start. Additional features are never side-quests — they are just new
 checkboxes in a plan.
+
+### Spec-first — acceptance criteria before code
+Before you scope the work, write the SPEC at the top of the feature plan: the user goal, then the
+behaviour as numbered `AC-N` given/when/then lines, then the non-goals. Each `AC-N` is one claim a
+real test will make red or green — so the acceptance criteria ARE your test list (step 4), one test
+per criterion, positive and negative. Keep the spec current: when behaviour moves, change the `AC-N`
+first, then the code and its test. The spec is the source of truth; code that disagrees with it is
+the bug. This mirrors how the framework itself is built (Spec-Driven Development in `tina4-maintainer`)
+and carries down the journeys `tina4-architect` mapped.
 
 ### 3. The plan folder — a master plan over feature plans
 `plan/` holds a **master plan** (`plan/MASTER.md`) that carries the overview — every feature and its
@@ -224,14 +292,21 @@ A feature plan has four parts — a Scope checklist, the Tests, a Bugs section, 
 ```markdown
 # Feature: Product Search API
 
+## Spec — acceptance criteria (write these FIRST, before any code)
+- AC-1: given a product "Widget", when GET /api/products?q=wid, then it is in the results
+- AC-2: given no match, when GET /api/products?q=zzz, then the body is [] with status 200 (never 500)
+- AC-3: given ?min=5&max=20, when listing, then only products priced 5–20 come back
+- Non-goals: fuzzy/typo matching, relevance ranking
+
 ## Scope
 - [x] Product model (id, name, price, created_at)
 - [x] GET /api/products?q= — search by name
 - [ ] Price-range filter (?min= &max=)
 
-## Tests (written first, real — no mocks)
-- [x] search returns matching products   (real SQLite, seeded rows)
-- [ ] price-range filter narrows results
+## Tests (written first, real — no mocks) — ONE per acceptance criterion
+- [x] AC-1 search returns matching products   (real SQLite, seeded rows)
+- [ ] AC-2 empty result returns [] not 500
+- [ ] AC-3 price-range filter narrows results
 
 ## Bugs
 - [x] q= containing % broke the LIKE — escaped the wildcards (a1b2c3d)
@@ -359,13 +434,13 @@ whenever the dev server is running (`tina4 serve` with `TINA4_DEBUG=true`):
 
 - **`api_search("render template")`** — ranked search across framework + your own code; returns fqn, signature, file:line. Run it BEFORE assuming a method exists.
 - **`api_class("Frond")`** — every method on a class, with signatures. A bare name (`Frond`), an import path, or the full fqn all resolve.
-- **`api_method("Frond", "add_test")`** — exact signature, params, return type, file and line for one method.
+- **`api_method`** with arguments `class` and `name` (e.g. `class="Frond"`, `name="add_test"`) — exact signature, a structured `params` list (`name`, `type`, `required`, `default`), `return` type, file and line for one method. Omit an argument and it answers `missing required argument 'name' (api_method takes class, name)`.
 - **`code_search("where is the auth token issued?")`** — fuzzy/semantic full-text search over **THIS project's own source + docs** (the native `Context` FTS5 index — zero-dep, kept live on every file save). Ranks the file that *defines* a symbol above tests that merely mention it. The in-repo, semantic counterpart to `api_*`.
 
 ```
 api_search("queue consume")     -> finds Queue.consume and its signature
 api_class("Database")           -> every method on Database, with signatures
-api_method("Frond", "add_test") -> add_test(name, fn)
+api_method(class="Frond", name="add_test") -> add_test(name, fn)
 code_search("send an email")    -> the routes/services in YOUR app that already do it
 ```
 
@@ -1135,7 +1210,7 @@ A feature without tests is not a feature — it's a liability.
 
 Before any deployment (staging or production), run the Carbonah tool:
 
-1. **Code correctness check** — does it pass all tests, lint clean, no deprecation warnings?
+1. **Code correctness check** — does it pass all tests, lint clean, no deprecation warnings? For a security pre-check, run `tina4 codeql` in the project before you push: it runs the same CodeQL scan (the security-extended suite) GitHub does, locally, over your JS/TS/Python/Ruby code and Actions, and exits non-zero on any finding (`tina4 install codeql` sets it up).
 2. **CO2 emissions benchmark** — measure energy per request, compare against previous baseline
 3. **Only deploy if both pass** — a regression in correctness OR carbon efficiency blocks deployment
 
@@ -1201,6 +1276,13 @@ against assumptions about another engine's compatibility.
 - Array literals (`{% set items = ["a", "b"] %}`), dict literals (`{% set obj = {"k": "v"} %}`),
   and subscript access (`{{ items[loop.index0 % 3] }}`) work as documented.
 - If a documented Frond feature misbehaves, that's a **framework bug** — report it (see below).
+
+### Mobile-first layout
+
+Build the smallest screen first, then enhance upward with `min-width` media queries - the base
+styles ARE the mobile styles, never a desktop layout patched down with `max-width`. Keep every
+interactive control at least 44x44px. Map tokens onto tina4-css; the `tina4-design` skill owns the
+full token + breakpoint detail. This is the default stance for any view you write.
 
 ### Web Push (Feature 140)
 

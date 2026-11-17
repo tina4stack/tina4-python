@@ -43,15 +43,20 @@ automatically when it's missing. So the `create_user` / `update_user` / `delete_
 above are already protected — you write nothing extra.
 
 - **Make a write route genuinely public** with `@noauth()` (e.g. a public contact form or a
-  login endpoint the caller reaches before it has a token):
+  login endpoint the caller reaches before it has a token). `@noauth()` drops the *identity*
+  requirement only — when `TINA4_CSRF=true` the route is still CSRF-checked, so a public FORM
+  renders `{{ form_token() }}` and still posts (see CSRF / Form Token Protection below):
   ```python
-  @noauth()                         # POST is public — no token required
+  @noauth()                         # POST is public — no identity token required
   @post("/contact")
   async def contact(request, response):
       Messenger().send(to="team@example.com", subject="New enquiry",
                        body=request.body["message"])
       return response({"status": "received"})
   ```
+- **Open a server-to-server endpoint** (a webhook or payment callback that carries no browser
+  session, so cannot send a form token) with `@noauth()` *and* `@no_csrf()`. `@no_csrf()` is the
+  explicit opt-out from CSRF; use it only when there is genuinely no browser form behind the POST.
 - **Protect a GET route** with `@secured()`.
 - Never `@noauth()` a route that writes data, costs money, returns another user's data, or is an
   admin action *without* the handler authenticating another way. A 401 while building means auth
@@ -153,7 +158,9 @@ async def list_users(request, response):
 
 ## CSRF / Form Token Protection
 
-State-changing forms must include a CSRF token. Tina4 provides this built-in:
+A form token proves ORIGIN — that this write came from a form your app rendered — **not** identity.
+It is not a login. Enable CSRF with `TINA4_CSRF=true`; then every write route is checked, and a
+state-changing form includes `{{ form_token() }}`:
 
 ```twig
 <form method="post" action="/contact">
@@ -163,9 +170,19 @@ State-changing forms must include a CSRF token. Tina4 provides this built-in:
 </form>
 ```
 
-The `{{ form_token() }}` template function renders a hidden input with a secure token. The
-framework validates it automatically on `POST` / `PUT` / `DELETE` requests; a missing or invalid
-token is rejected. (The function is `form_token()` — snake_case — not `formToken()`.)
+The `{{ form_token() }}` template function renders a hidden input with a secure, session-bound token.
+The framework validates it on `POST` / `PUT` / `DELETE`; a missing or invalid token is rejected 403.
+(The function is `form_token()` — snake_case — not `formToken()`.)
+
+CSRF (origin) and `@noauth` (identity) are orthogonal:
+
+- **Public form** (contact, sign-up): `@noauth()` route + `{{ form_token() }}` in the form. The
+  POST needs no login AND stays CSRF-protected — the common case, and what most forms want.
+- **Protected form** (the visitor is logged in): a real identity token authenticates the write
+  (frond.js sends it as the `Authorization: Bearer` header). The form token alone is NOT an identity
+  and a protected route will 401 without one — send the login token, do not drop `@noauth`.
+- **Webhook / server-to-server** (no browser, no form): `@noauth()` + `@no_csrf()` to opt out of the
+  form-token check. `@no_csrf()` is imported from `tina4_python.core.router`.
 
 frond.js attaches the token automatically on `saveForm` / `sendRequest`.
 
