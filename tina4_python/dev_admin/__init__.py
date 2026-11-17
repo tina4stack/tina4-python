@@ -742,6 +742,26 @@ def _peak_rss_mb() -> float:
     return round(peak / divisor, 2)
 
 
+def _current_rss_mb() -> float:
+    """Current resident set size of this process, in MB.
+
+    From psutil when it is installed, else from ``VmRSS`` in
+    ``/proc/self/status`` (kilobytes; Linux and Android). Raises (OSError
+    where there is no /proc) when neither can be read, e.g. macOS or Windows
+    without psutil. Never the peak.
+    """
+    try:
+        import psutil  # optional
+        return round(psutil.Process().memory_info().rss / 1024.0 / 1024.0, 2)
+    except Exception:
+        pass
+    with open("/proc/self/status") as fh:
+        for line in fh:
+            if line.startswith("VmRSS:"):
+                return round(int(line.split()[1]) / 1024.0, 2)
+    raise OSError("no VmRSS line in /proc/self/status")
+
+
 async def _api_status(request, response):
     """System status overview."""
     import sys
@@ -756,19 +776,17 @@ async def _api_status(request, response):
             db_table_count = len(db.get_tables())
     except Exception:
         pass
-    # Memory telemetry — best-effort via resource (POSIX) or psutil if present;
-    # falls back to 0.0 on Windows with no psutil so the key shape stays stable.
+    # Memory telemetry — peak via resource (POSIX), current via psutil or
+    # /proc. A figure that cannot be measured stays 0.0 so the key shape is
+    # stable; the peak is never reported as current usage.
     memory_usage_mb = 0.0
     peak_memory_mb = 0.0
     try:
         peak_memory_mb = _peak_rss_mb()
-        memory_usage_mb = peak_memory_mb  # resource has no current-rss field
     except Exception:
         pass
     try:
-        import psutil  # optional
-        proc = psutil.Process()
-        memory_usage_mb = round(proc.memory_info().rss / 1024.0 / 1024.0, 2)
+        memory_usage_mb = _current_rss_mb()
     except Exception:
         pass
 
@@ -1388,10 +1406,10 @@ async def _api_system(request, response):
         "database": redact_url(os.environ.get("TINA4_DATABASE_URL", "not configured")),
     }
 
-    # Memory info
+    # Memory info — current RSS; None where it cannot be measured (never the peak)
     try:
-        info["memory_mb"] = _peak_rss_mb()
-    except (ImportError, AttributeError):
+        info["memory_mb"] = _current_rss_mb()
+    except Exception:
         info["memory_mb"] = None
 
     # Uptime
