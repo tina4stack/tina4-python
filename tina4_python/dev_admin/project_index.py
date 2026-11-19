@@ -217,7 +217,7 @@ def _extract(path: Path) -> dict:
     except OSError:
         return {}
     entry: dict = {
-        "path": str(path.relative_to(_project_root())),
+        "path": path.relative_to(_project_root()).as_posix(),
         "size": size,
         "mtime": mtime,
         "language": _language_for(path),
@@ -317,7 +317,9 @@ def refresh() -> dict:
     seen: set[str] = set()
     root = _project_root()
     for p in _walk_project():
-        rel = str(p.relative_to(root))
+        # "/"-separated on every OS, so a file has one key everywhere
+        # (str() of a Windows path would give src\routes\x.py).
+        rel = p.relative_to(root).as_posix()
         seen.add(rel)
         try:
             mtime = int(p.stat().st_mtime)
@@ -341,7 +343,7 @@ def refresh() -> dict:
         "updated": updated,
         "removed": len(removed_paths),
         "total": len(files),
-        "path": str(_index_path().relative_to(root)),
+        "path": _index_path().relative_to(root).as_posix(),
     }
 
 

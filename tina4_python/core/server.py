@@ -595,7 +595,10 @@ def _record_broken_import(py_file: Path, error: Exception) -> None:
         broken_dir = Path("data/.broken")
         broken_dir.mkdir(parents=True, exist_ok=True)
         import json
-        slug = str(py_file).replace("/", "_").replace("\\", "_")
+        # ":" too: an absolute Windows path starts with a drive letter, and on
+        # NTFS a colon in a file name writes an alternate data stream instead of
+        # a file, so the *.broken glob below would never see the marker.
+        slug = str(py_file).replace("/", "_").replace("\\", "_").replace(":", "_")
         (broken_dir / f"discover_{slug}.broken").write_text(json.dumps({
             "type": "auto_discover_failure",
             "file": str(py_file),
