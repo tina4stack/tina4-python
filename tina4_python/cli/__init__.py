@@ -921,10 +921,20 @@ def _migrate_create(args):
         print("Usage: tina4python migrate:create <description>")
         sys.exit(1)
     desc = " ".join(positional)
+    # The description is prose ("add things"); the generator names the file
+    # with it verbatim. Slug it first, with the rule `create_migration()` and
+    # the MCP `migration_create` tool use (and php/ruby/nodejs migrate:create),
+    # so the file is `<ts>_add_things.sql`, not `<ts>_add things.sql`, and a
+    # "create users" description gets the `create_` scaffold.
+    name = re.sub(r"[^a-z0-9]+", "_", desc.lower()).strip("_")
+    if not name:
+        print("Usage: tina4python migrate:create <description>")
+        print("  The description needs at least one letter or digit.")
+        sys.exit(1)
     # Private marker read by _gen_migration + _resolve_generation to suppress
     # the co-emitted test — see the `migrate:create` contract above.
     flags["_no_test"] = True
-    _emit_resolution("migration", desc, flags)
+    _emit_resolution("migration", name, flags)
 
 
 def _migrate_rollback(args):
