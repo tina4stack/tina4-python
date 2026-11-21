@@ -337,6 +337,19 @@ def test_import_failure_writes_a_broken_sentinel(project):
     assert "broken.py" in payload
 
 
+def test_broken_import_marker_name_drops_the_drive_colon(project):
+    """An absolute Windows path starts with a drive letter. A ':' in an NTFS
+    file name writes an alternate data stream instead of a file, so the marker
+    vanished from the *.broken glob that /health reads. Linux allows the ':',
+    so the name itself is the check there; on Windows the glob is."""
+    _server._record_broken_import(Path("C:/app/src/routes/broken.py"), SyntaxError("boom"))
+
+    sentinels = list((project / "data" / ".broken").glob("discover_*.broken"))
+    assert len(sentinels) == 1, f"expected one marker, found {sentinels}"
+    assert ":" not in sentinels[0].name
+    assert "broken.py" in sentinels[0].read_text()
+
+
 def test_transitively_imported_module_is_not_reimported(project):
     """Issue #53 — a module pulled in TRANSITIVELY (imported by another src
     file before the walk reaches its own file) must NOT be del+re-imported by
