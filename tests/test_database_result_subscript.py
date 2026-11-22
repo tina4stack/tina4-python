@@ -12,8 +12,6 @@ row, but DatabaseResult had no ``__getitem__`` and raised
 access now delegate to ``.records``. No database required for the unit checks;
 a SQLite round-trip confirms it on a real fetch.
 """
-import tempfile
-
 from tina4_python.database.adapter import DatabaseResult
 from tina4_python.database import Database
 
@@ -37,14 +35,15 @@ def test_len_and_iter_still_work():
     assert [row["id"] for row in r] == [1, 2]
 
 
-def test_index_access_on_real_fetch():
-    with tempfile.NamedTemporaryFile(suffix=".db") as tf:
-        db = Database(f"sqlite:///{tf.name}")
-        db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
-        db.execute("INSERT INTO t (name) VALUES ('alice')")
-        db.execute("INSERT INTO t (name) VALUES ('bob')")
-        db.commit()
-        result = db.fetch("SELECT * FROM t ORDER BY id")
-        assert result[0]["name"] == "alice"   # the exact documented form
-        assert result[1]["name"] == "bob"
-        db.close()
+def test_index_access_on_real_fetch(tmp_path):
+    # tmp_path, not NamedTemporaryFile: on Windows that file is held open
+    # exclusively, so SQLite cannot open it at all.
+    db = Database(f"sqlite:///{tmp_path / 'subscript.db'}")
+    db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    db.execute("INSERT INTO t (name) VALUES ('alice')")
+    db.execute("INSERT INTO t (name) VALUES ('bob')")
+    db.commit()
+    result = db.fetch("SELECT * FROM t ORDER BY id")
+    assert result[0]["name"] == "alice"   # the exact documented form
+    assert result[1]["name"] == "bob"
+    db.close()

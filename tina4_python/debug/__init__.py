@@ -840,6 +840,7 @@ class Log:
             plain = snap.format == "json" or not _stdout_is_tty()
             color = "" if plain else COLORS.get(level, "")
             reset = "" if plain else RESET
+            ensure_utf8_stdio()
             print(f"{color}{stdout_line}{reset}", flush=True)
 
         if file_ok and snap.main_sink is not None:
@@ -898,6 +899,36 @@ class Log:
         """Critical-level log -- the highest severity. Always emitted like
         every other level, subject only to the configured threshold."""
         cls._emit("CRITICAL", message, cls._merge_context(context, kwargs))
+
+
+def ensure_utf8_stdio() -> None:
+    """Make stdout and stderr write UTF-8, whatever the platform's locale says.
+
+    PHP, Ruby and Node emit UTF-8 bytes to a pipe or a file. Python encodes text
+    with the LOCALE codepage instead, and on Windows that is cp1252 whenever
+    the stream is not a console (a pipe, a redirect, a service manager, the
+    `tina4` client capturing output). The CLI's own status marks (U+2713/U+2717)
+    and any log message carrying a character outside cp1252 then raised
+    UnicodeEncodeError: `tina4python generate model Foo | more` crashed, and a
+    Log line from inside a request took the request down with it.
+
+    A console stream is already UTF-8 (Python writes it with WriteConsoleW), so
+    this is a no-op there and on any POSIX host with a UTF-8 locale. Streams
+    that cannot be reconfigured (replaced by a test runner, already closed) are
+    left alone.
+    """
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if encoding == "utf8":
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
 
 
 def _stdout_is_tty() -> bool:

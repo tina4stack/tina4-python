@@ -328,6 +328,116 @@ _ADDR_IN_USE = ("address already in use", "address in use", "eaddrinuse",
                 "errno 48", "errno 98", "oserror: [errno 48]", "oserror: [errno 98]")
 
 
+def process_rss_mb(pid: int, include_children: bool = False) -> float:
+    """Resident memory of a live process, in MB, read from the OS.
+
+    POSIX: ``ps`` RSS (with include_children, the process plus its direct
+    children). Windows has no ``ps`` that reports RSS, so the same measurement
+    comes from the kernel's working-set size (K32GetProcessMemoryInfo); a Tina4
+    test server there is a single process, so there are no children to add.
+    Returns 0.0 when the process cannot be read, which callers assert against.
+    """
+    if IS_WINDOWS:
+        import ctypes
+        from ctypes import wintypes
+
+        class _Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(_Counters), wintypes.DWORD)
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        query_limited_information = 0x1000
+        handle = kernel32.OpenProcess(query_limited_information, False, pid)
+        if not handle:
+            return 0.0
+        try:
+            counters = _Counters()
+            counters.cb = ctypes.sizeof(counters)
+            if not kernel32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return 0.0
+            return counters.WorkingSetSize / (1024 * 1024)
+        finally:
+            kernel32.CloseHandle(handle)
+
+    out = _subprocess.run(["ps", "-Ao", "rss,pid,ppid"], capture_output=True, text=True,
+                          check=False).stdout
+    total = 0
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        rss, this_pid, parent = parts[0], parts[1], parts[2]
+        if this_pid == str(pid) or (include_children and parent == str(pid)):
+            try:
+                total += int(rss)
+            except ValueError:
+                pass
+    return total / 1024
+
+
+def _host_can_create_symlinks() -> bool:
+    """Probe it, never assume it: Windows creates symlinks only with Developer
+    Mode or an elevated token (otherwise WinError 1314); POSIX always can."""
+    import tempfile
+    probe_dir = tempfile.mkdtemp(prefix="tina4-symlink-probe-")
+    target = os.path.join(probe_dir, "target")
+    link = os.path.join(probe_dir, "link")
+    try:
+        open(target, "w").close()
+        os.symlink(target, link)
+        return True
+    except (OSError, NotImplementedError):
+        return False
+    finally:
+        for path in (link, target):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        try:
+            os.rmdir(probe_dir)
+        except OSError:
+            pass
+
+
+HOST_CAN_CREATE_SYMLINKS = _host_can_create_symlinks()
+
+# For a test whose subject is a symlink. On a host that cannot make one, the test
+# cannot exist; the tag excuses it under TINA4_REQUIRE_SERVICES as a platform
+# exclusion, and it runs on any host that can (Linux CI, Windows Developer Mode).
+needs_symlinks = pytest.mark.skipif(
+    not HOST_CAN_CREATE_SYMLINKS,
+    reason="[needs:symlink-privilege] this host cannot create symlinks "
+           "(Windows needs Developer Mode or an elevated shell)",
+)
+
+
+def anchor_pytest_project(project) -> None:
+    """Give a throwaway project its OWN pytest config before a nested pytest run.
+
+    pytest picks its rootdir and inifile by climbing from the test path to the
+    first config file above it. A project under tmp_path has none of its own, so
+    a nested run adopts whatever sits above the temp dir. MEASURED on a Windows
+    host whose %TEMP% held a stray pyproject.toml with [tool.pytest.ini_options]:
+    every nested run took %TEMP% itself as its rootdir, scanned it while other
+    processes created and removed directories there, and died at collection with
+    FileNotFoundError. A real Tina4 project carries its own config, so the test
+    project does too.
+    """
+    from pathlib import Path as _Path
+    ini = _Path(project) / "pytest.ini"
+    if not ini.exists():
+        ini.write_text("[pytest]\n", encoding="utf-8")
+
+
 def free_port() -> int:
     """A port that was free a moment ago. Inherently racy: use boot_child_server."""
     with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
@@ -388,11 +498,11 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     test must know which version is being served before it edits anything) passes
     its own check rather than settling for an open socket.
 
-    log_dir sends the child's stdout+stderr to a FILE instead of a pipe, and
-    records it as ``proc.tina4_log_path``. Use it whenever the test needs to read
-    what the server logged while it is still alive, or whenever the child may
-    outlive a readiness check — a pipe nobody drains fills at 64KB and wedges the
-    child mid-write.
+    The child's stdout+stderr always go to a FILE, recorded as
+    ``proc.tina4_log_path`` (read it live with read_child_log). log_dir picks the
+    directory; without it the log lands under ``tmp_path / "child-logs"``. A pipe
+    nobody drains fills (64KB on Linux, ~4KB on Windows) and wedges the child
+    mid-write.
 
     new_session puts the child in its own session/process group (pgid == pid) on
     POSIX, or its own console process group on Windows, so a test can signal it
@@ -439,25 +549,27 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
         if "TINA4_SECRET" not in unset_env and len(env.get("TINA4_SECRET", "").encode()) < 32:
             env["TINA4_SECRET"] = _TEST_SECRET
 
-        log_path = None
-        if log_dir is not None:
-            log_path = _Path(log_dir)
-            log_path.mkdir(parents=True, exist_ok=True)
-            log_path = log_path / f"server_{port}.log"
+        # ALWAYS a file, never an undrained pipe. A pipe nobody reads fills and
+        # then blocks the child on its next log write: at 64KB on Linux, but at
+        # ~4KB on Windows (CreatePipe's default), where a module-scoped server
+        # wedged after about fifteen requests' worth of access-log lines and
+        # every later request timed out.
+        log_dir_path = _Path(log_dir if log_dir is not None else tmp_path / "child-logs")
+        log_dir_path.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir_path / f"server_{port}.log"
 
         # A file the child owns outright beats a pipe: nothing has to drain it,
         # so the server can log all day without blocking, and the test can read
         # it while the server is still running.
-        sink = open(log_path, "wb") if log_path is not None else None
+        sink = open(log_path, "wb")
         try:
             proc = _subprocess.Popen(
                 [_sys.executable, "app.py"], cwd=str(proj), env=env,
-                stdout=sink or _subprocess.PIPE, stderr=_subprocess.STDOUT,
+                stdout=sink, stderr=_subprocess.STDOUT,
                 **spawn_kwargs(new_session),
             )
         finally:
-            if sink is not None:
-                sink.close()  # the child kept its own dup of the fd
+            sink.close()  # the child kept its own dup of the fd
         proc.tina4_log_path = log_path
 
         deadline = _time.time() + boot_timeout

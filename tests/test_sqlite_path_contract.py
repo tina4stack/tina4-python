@@ -56,9 +56,10 @@ def test_relative_under_cwd_creates_parent_mode_0775(tmp_path, monkeypatch):
     finally:
         os.umask(old_umask)
     parent = os.path.join(os.getcwd(), "sub", "dir")
-    assert resolved == os.path.join(parent, "app.db")
+    assert os.path.normpath(resolved) == os.path.join(parent, "app.db")
     assert os.path.isdir(parent), "parent dir auto-created under cwd"
-    assert (os.stat(parent).st_mode & 0o777) == 0o775, "parent created with mode 0775"
+    if os.name == "posix":  # Windows has no permission bits: a directory reports 0o777
+        assert (os.stat(parent).st_mode & 0o777) == 0o775, "parent created with mode 0775"
 
 
 def test_relative_escaping_cwd_is_refused_no_mkdir(tmp_path, monkeypatch):

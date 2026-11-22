@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import child_pythonpath
+from conftest import anchor_pytest_project, child_pythonpath
 
 
 def _cli_prefix() -> list[str]:
@@ -59,6 +59,7 @@ def _run_generated_test(project: Path, test_rel: str) -> None:
     env.setdefault("TINA4_SECRET", "meta-test-secret-0123456789abcde")
     # Isolate the child pytest's tmp base so its retention cleanup cannot delete
     # the parent run's active numbered dir (FileNotFoundError cascade).
+    anchor_pytest_project(project)
     child_tmp = tempfile.mkdtemp(prefix="tina4-coemit-pytmp-")
     env["TMPDIR"] = env["TMP"] = env["TEMP"] = child_tmp
     try:

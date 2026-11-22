@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import child_pythonpath, free_port
+from conftest import child_pythonpath, free_port, needs_symlinks
 from tina4_python.core.request import Request, save_upload
 
 BOUNDARY = "----Tina4FileUploadContract"
@@ -114,7 +114,11 @@ class TestSafeSaveConfines:
             save_upload({"filename": "ok\x00.txt", "content": b"x"}, str(target))
 
 
-    @pytest.mark.parametrize("link", ["symlink", "dangling", "hardlink"])
+    @pytest.mark.parametrize("link", [
+        pytest.param("symlink", marks=needs_symlinks),
+        pytest.param("dangling", marks=needs_symlinks),
+        "hardlink",
+    ])
     def test_safe_save_replaces_a_link_at_the_name_instead_of_writing_through_it(self, tmp_path, link):
         target = tmp_path / "uploads"
         target.mkdir()
@@ -136,6 +140,7 @@ class TestSafeSaveConfines:
         assert (target / "pic.txt").read_bytes() == b"UPLOADED"
         assert sorted(p.name for p in target.iterdir()) == ["pic.txt"]
 
+    @needs_symlinks
     def test_safe_save_never_follows_a_link_swapped_in_after_its_check(self, tmp_path, monkeypatch):
         import tina4_python.core.request as request_module
         target = tmp_path / "uploads"

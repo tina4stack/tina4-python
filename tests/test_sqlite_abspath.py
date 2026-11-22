@@ -8,6 +8,7 @@
 the ABSOLUTE file, not a path relative to cwd. Real driver, real files, no mocks."""
 import os
 import tempfile
+from pathlib import Path
 
 from tina4_python.database.connection import Database
 
@@ -21,7 +22,10 @@ def test_naive_one_slash_absolute_path_opens_the_absolute_file(tmp_path, monkeyp
 
     assert db._connection_path() == abs_db, "one-slash absolute path did not resolve to the abs path"
     assert os.path.exists(abs_db), "DB not created at the absolute path (footgun resolved it relative)"
-    shadow = tmp_path / abs_db.lstrip("/")
+    # Where the footgun's cwd-relative copy would land: the path minus its anchor
+    # ("/" on POSIX, the drive on Windows). Joining the absolute path itself would
+    # just name abs_db again on Windows.
+    shadow = tmp_path / Path(abs_db).relative_to(Path(abs_db).anchor)
     assert not shadow.exists(), f"footgun: a cwd-relative shadow DB was created at {shadow}"
 
 
@@ -36,7 +40,9 @@ def test_three_slash_relative_form_unchanged(tmp_path, monkeypatch):
     # Documented relative form: sqlite:///rel → cwd/rel. Must not regress.
     monkeypatch.chdir(tmp_path)                            # isolate cwd (path resolution mkdirs under it)
     db = Database("sqlite:///data/app.db", pool=1)         # lazy: no connection
-    assert db._connection_path() == os.path.join(os.getcwd(), "data", "app.db")
+    # normpath: the resolver joins the URL's "/"-separated path onto cwd, so on
+    # Windows it holds both separators. The file it names is what is pinned.
+    assert os.path.normpath(db._connection_path()) == os.path.join(os.getcwd(), "data", "app.db")
 
 
 def test_memory_forms_unchanged():
@@ -64,7 +70,7 @@ def test_windows_absolute_form_passes_through():
 def test_relative_form_creates_parent_dir_under_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     resolved = Database("sqlite:///sub/dir/app.db", pool=1)._connection_path()
-    assert resolved == os.path.join(os.getcwd(), "sub", "dir", "app.db")
+    assert os.path.normpath(resolved) == os.path.join(os.getcwd(), "sub", "dir", "app.db")
     assert os.path.isdir(os.path.join(os.getcwd(), "sub", "dir")), "parent dir auto-created under cwd"
 
 

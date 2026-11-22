@@ -385,7 +385,10 @@ def _delegate_to_client(command: str, args: list) -> int:
     # output work exactly as if it had been invoked directly.
     env = dict(os.environ)
     env[DELEGATION_GUARD_ENV] = command
-    return subprocess.run([client, command, *args], env=env).returncode
+    # A `tina4.cmd` / `.bat` client is re-parsed by cmd.exe; run_allowing_batch
+    # escapes every argument for it so `|`, `&`, `%VAR%` and `^` arrive verbatim.
+    from tina4_python.core.batch_spawn import run_allowing_batch
+    return run_allowing_batch([client, command, *args], env=env).returncode
 
 
 # ── Main entry point ─────────────────────────────────────────────────
@@ -395,6 +398,8 @@ HELP_FLAGS = ("--help", "-h")
 
 def main():
     """CLI entry point."""
+    from tina4_python.debug import ensure_utf8_stdio
+    ensure_utf8_stdio()
     args = sys.argv[1:]
     if not args or args[0].lower() in HELP_FLAGS:
         _help()

@@ -10,6 +10,7 @@ import pytest
 import mimetypes
 from pathlib import Path
 from unittest.mock import patch
+from conftest import needs_symlinks
 from tina4_python.core.server import _try_static
 from tina4_python.core.response import Response
 
@@ -305,6 +306,7 @@ class TestStaticContractFeature41:
 
         assert _try_static("/css/../../secret.env") is None
 
+    @needs_symlinks
     def test_a_symlink_escaping_the_public_dir_is_refused(self, tmp_path, monkeypatch):
         # A real secret OUTSIDE the public dir, reached by a real symlink placed
         # INSIDE it. A lexical `..` check cannot see this; realpath containment must.
