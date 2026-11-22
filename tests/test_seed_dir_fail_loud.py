@@ -69,6 +69,8 @@ def test_a_clean_folder_returns_the_executed_files_in_order_and_skips_underscore
     second = _write(seeds, "002_second.py", record.format("002_second"))
     first = _write(seeds, "001_first.py", record.format("001_first"))
     _write(seeds, "_helper.py", "raise RuntimeError('a helper must never run')\n")
+    # Not a .py seed file: a runner that executes every file would run it.
+    _write(seeds, "README.txt", "raise RuntimeError('a README must never run')\n")
 
     executed = FakeData().seed_dir(str(seeds))
 
