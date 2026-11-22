@@ -539,6 +539,11 @@ fake.boolean() -> bool
 fake.word() -> str
 
 seed_table(db, table_name, count=10, field_map=None, overrides=None) -> int
+
+# Run every seed file in a folder in name order (skips _*.py); calls a module's
+# run(db). The first file that raises stops the run and raises SeedError naming
+# it (.seed_file, .completed); `tina4python seed` then exits 1 (ADR-0108).
+fake.seed_dir(seed_folder="seeds", db=None) -> list[str]
 ```
 
 ### Api — External HTTP client
