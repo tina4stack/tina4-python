@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import socket
 import subprocess
 import sys
 import time
 
+from conftest import kill_process_tree, send_graceful_shutdown, spawn_kwargs
 from tina4_python.core.port_takeover import NOTHING, REFUSED_PROD, take_over_port
 
 SECRET = "serve-free-port-secret-0123456789abcdef"
@@ -52,12 +52,12 @@ def _serve(tmp_path, port: int, extra_env: dict[str, str], *flags: str):
                 "TINA4_SECRET": SECRET, "PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1"})
     env.update(extra_env)
     log = root / "serve.log"
-    kwargs = {"start_new_session": True} if os.name == "posix" else {}
     with open(log, "wb") as log_fh:
         proc = subprocess.Popen(
             [sys.executable, "-c", "from tina4_python.cli import main; main()",
              "serve", *flags, "--no-browser", "--no-reload", "--host", "127.0.0.1", "--port", str(port)],
-            cwd=root, env=env, stdout=log_fh, stderr=subprocess.STDOUT, **kwargs,
+            cwd=root, env=env, stdout=log_fh, stderr=subprocess.STDOUT,
+            **spawn_kwargs(new_session=True),
         )
     return proc, log
 
@@ -65,21 +65,11 @@ def _serve(tmp_path, port: int, extra_env: dict[str, str], *flags: str):
 def _terminate(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
-    if os.name == "posix":
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-            proc.wait(timeout=10)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    else:
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
+        send_graceful_shutdown(proc)
+        proc.wait(timeout=10)
+    except (ProcessLookupError, OSError, subprocess.TimeoutExpired):
+        kill_process_tree(proc)
 
 
 def _read(log) -> str:

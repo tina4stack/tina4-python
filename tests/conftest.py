@@ -251,7 +251,7 @@ def _reset_inherited_signal_dispositions():  # pragma: no cover - runs in the ch
 
     Resetting here means the child always starts from the documented default,
     whatever launched the suite. POSIX-only; Windows has no SIGHUP/SIGQUIT and
-    preexec_fn is not supported there.
+    preexec_fn is not supported there, so spawn_kwargs() leaves it out.
     """
     for name in ("SIGHUP", "SIGINT", "SIGQUIT"):
         sig = getattr(_signal, name, None)
@@ -260,6 +260,68 @@ def _reset_inherited_signal_dispositions():  # pragma: no cover - runs in the ch
                 _signal.signal(sig, _signal.SIG_DFL)
             except (OSError, ValueError):
                 pass
+
+
+IS_WINDOWS = _sys.platform == "win32"
+
+
+def spawn_kwargs(new_session: bool = False) -> dict:
+    """Popen kwargs for a test child, portable across POSIX and Windows.
+
+    POSIX: the child resets the signal dispositions it inherited (see
+    _reset_inherited_signal_dispositions) and, with new_session, becomes the
+    leader of its own session/process group (pgid == pid), so a test can signal
+    the whole group without reaching the pytest runner.
+
+    Windows: preexec_fn and sessions do not exist (Popen raises "preexec_fn is
+    not supported on Windows platforms"). The equivalent of a new session is a
+    new console process GROUP: CTRL_BREAK_EVENT can then be sent to the child
+    alone (send_graceful_shutdown) and kill_process_tree() reaps it.
+    """
+    if IS_WINDOWS:
+        return {"creationflags": _subprocess.CREATE_NEW_PROCESS_GROUP} if new_session else {}
+    return {"start_new_session": new_session,
+            "preexec_fn": _reset_inherited_signal_dispositions}
+
+
+def send_graceful_shutdown(proc) -> None:
+    """Ask a child server to shut down the way an operator would.
+
+    POSIX: SIGTERM to the child's process group (boot with new_session=True).
+    Windows: CTRL_BREAK_EVENT to the child's console process group, the signal
+    a Windows service manager or console sends; SIGTERM cannot be delivered to
+    another process there (os.kill(pid, SIGTERM) is TerminateProcess).
+    """
+    if IS_WINDOWS:
+        proc.send_signal(_signal.CTRL_BREAK_EVENT)
+    else:
+        os.killpg(proc.pid, _signal.SIGTERM)
+
+
+def kill_process_tree(proc) -> None:
+    """Hard-kill a child and everything it started; never raises, then reaps.
+
+    POSIX: SIGKILL to the process group (the child must be a group leader).
+    Windows: taskkill /T /F walks the child's process tree.
+    """
+    if proc is None:
+        return
+    try:
+        if IS_WINDOWS:
+            if proc.poll() is None:
+                _subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                                stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+                                check=False)
+                if proc.poll() is None:
+                    proc.kill()
+        else:
+            os.killpg(proc.pid, _signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        pass
 
 
 _ADDR_IN_USE = ("address already in use", "address in use", "eaddrinuse",
@@ -332,9 +394,10 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     outlive a readiness check — a pipe nobody drains fills at 64KB and wedges the
     child mid-write.
 
-    new_session puts the child in its own session/process group (pgid == pid), so
-    a test can ``os.killpg(proc.pid, ...)`` without signalling the pytest runner
-    that spawned it. Required for any test that signals the server.
+    new_session puts the child in its own session/process group (pgid == pid) on
+    POSIX, or its own console process group on Windows, so a test can signal it
+    (send_graceful_shutdown / kill_process_tree) without signalling the pytest
+    runner that spawned it. Required for any test that signals the server.
 
     fixed_port pins the base port instead of picking a random free one. Needed
     whenever the CALLER must coordinate a sibling port around the base (e.g. the
@@ -390,8 +453,7 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
             proc = _subprocess.Popen(
                 [_sys.executable, "app.py"], cwd=str(proj), env=env,
                 stdout=sink or _subprocess.PIPE, stderr=_subprocess.STDOUT,
-                start_new_session=new_session,
-                preexec_fn=_reset_inherited_signal_dispositions,
+                **spawn_kwargs(new_session),
             )
         finally:
             if sink is not None:

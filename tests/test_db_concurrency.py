@@ -27,7 +27,6 @@ Mutation-proof (each goes RED - see plan/db-async-concurrency.md for the record)
 import http.client
 import json
 import os
-import signal
 import subprocess
 import sys
 import threading
@@ -36,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import free_port
+from conftest import free_port, kill_process_tree, send_graceful_shutdown, spawn_kwargs
 from db_engine_matrix import engines, required_engines_missing
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -198,14 +197,10 @@ def _get(port, path, timeout=60.0):
 def _stop(proc):
     if proc.poll() is None:
         try:
-            os.killpg(proc.pid, signal.SIGTERM)
+            send_graceful_shutdown(proc)
             proc.wait(timeout=10)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait(timeout=5)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
-                pass
+        except (ProcessLookupError, OSError, subprocess.TimeoutExpired):
+            kill_process_tree(proc)
 
 
 def _boot(root, port, server, name, url, user, password):
@@ -227,7 +222,7 @@ def _boot(root, port, server, name, url, user, password):
         env["TINA4_SECRET"] = "tina4-python-test-suite-secret-0123456789abcdef"
     log = open(root / "server.log", "w")  # noqa: SIM115 - closed with the process
     proc = subprocess.Popen(
-        [sys.executable, "app.py"], cwd=str(root), env=env, start_new_session=True,
+        [sys.executable, "app.py"], cwd=str(root), env=env, **spawn_kwargs(new_session=True),
         stdout=log, stderr=subprocess.STDOUT,
     )
     deadline = time.time() + 60
