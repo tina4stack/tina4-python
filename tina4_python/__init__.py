@@ -220,7 +220,7 @@ def _preload_from_manifest() -> None:
         manifest = pathlib.Path.cwd() / ".tina4" / "preload.json"
         if not manifest.exists():
             return
-        data = json.loads(manifest.read_text())
+        data = json.loads(manifest.read_text(encoding="utf-8"))
         import importlib
         for feature in data.get("features", []):
             try:

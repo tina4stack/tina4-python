@@ -702,7 +702,7 @@ class McpServer:
         config = {}
         if config_file.exists():
             try:
-                config = json.loads(config_file.read_text())
+                config = json.loads(config_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -715,7 +715,7 @@ class McpServer:
             "url": f"http://localhost:{port}{self.path}",
         }
 
-        config_file.write_text(json.dumps(config, indent=2) + "\n")
+        config_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
 # ── Decorator API ──────────────────────────────────────────────

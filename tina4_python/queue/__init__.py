@@ -437,7 +437,7 @@ class Queue:
                     continue
                 filepath = os.path.join(queue_dir, filename)
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding="utf-8") as f:
                         job_data = json.load(f)
                     if job_data.get("id") == job_id and job_data.get("status") == "pending":
                         # Reserve (so a dead consumer's job is reclaimable) then

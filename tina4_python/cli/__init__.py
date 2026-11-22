@@ -1227,9 +1227,12 @@ def _build(args):
         # must be lowercase). Fall back to a sane name for an unnamed cwd.
         tag = f"{(Path.cwd().name.lower() or 'tina4app')}:latest"
 
-    dockerfile = Path(flags.get("file") or "Dockerfile")
+    requested = flags.get("file") or "Dockerfile"
+    dockerfile = Path(requested)
     if not dockerfile.is_file():
-        print(f"  ✗ No {dockerfile} found.")
+        # Echo the path as the user typed it: str(Path) rewrites
+        # docker/prod/Dockerfile to docker\prod\Dockerfile on Windows.
+        print(f"  ✗ No {requested} found.")
         print("  A Tina4 app deploys as a container. Scaffold a Dockerfile first:")
         print("      tina4 deploy docker        (or: tina4python init)")
         sys.exit(1)

@@ -897,7 +897,7 @@ def _acquire_file_lock(migration_folder: str):
         path = _file_lock_path(migration_folder)
         # Open for append-create: the file is only ever a lock target, nothing is
         # written to it, and we must not truncate a sidecar a holder is using.
-        handle = open(path, "a")
+        handle = open(path, "a", encoding="utf-8")
         _lock_exclusive(handle)
         return ("file", handle)
     except Exception as exc:

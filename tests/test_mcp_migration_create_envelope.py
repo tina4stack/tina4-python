@@ -83,7 +83,7 @@ def _fresh_mcp_handler(tmp_path):
 
 def _project_files(root: Path):
     """Every file anywhere under `root`, as relative POSIX strings."""
-    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
 
 
 # ── 1. Positive envelope — the wire contract an agent depends on ────────

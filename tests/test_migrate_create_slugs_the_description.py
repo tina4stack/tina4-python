@@ -22,6 +22,7 @@ subprocess under `tmp_path`, so what it observes is what a user gets.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -98,7 +99,7 @@ def test_slug_matches_create_migration(tmp_path):
         api = create_migration(desc, str(api_dir))
         strip = lambda name: re.sub(r"^\d{14}_", "", name)
         cli_up = [f for f in _migration_files(cli_dir) if not f.endswith(".down.sql")]
-        assert [strip(f) for f in cli_up] == [strip(api.rsplit("/", 1)[-1])], desc
+        assert [strip(f) for f in cli_up] == [strip(os.path.basename(api))], desc
 
 
 def test_create_description_gets_the_create_table_scaffold(tmp_path):

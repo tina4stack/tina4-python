@@ -30,6 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import anchor_pytest_project
+
 # A fresh interpreter that runs the real CLI `main` with `test` as the command.
 _RUN_CLI = (
     "import sys; "
@@ -68,6 +70,7 @@ def _make_project(root: Path, inline_body: str, *, with_side_effect: bool = Fals
     (src / "inline_math.py").write_text(inline_body, encoding="utf-8")
     if with_side_effect:
         (src / "side_effect.py").write_text(_SIDE_EFFECT, encoding="utf-8")
+    anchor_pytest_project(root)
 
 
 def _run_tina4_test(project_dir: Path) -> subprocess.CompletedProcess:

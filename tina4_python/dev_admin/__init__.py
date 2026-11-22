@@ -755,7 +755,7 @@ def _current_rss_mb() -> float:
         return round(psutil.Process().memory_info().rss / 1024.0 / 1024.0, 2)
     except Exception:
         pass
-    with open("/proc/self/status") as fh:
+    with open("/proc/self/status", encoding="utf-8") as fh:
         for line in fh:
             if line.startswith("VmRSS:"):
                 return round(int(line.split()[1]) / 1024.0, 2)
@@ -852,7 +852,7 @@ def _read_queue_dir(directory: str, status: str = None) -> list:
         if not filename.endswith(".queue-data"):
             continue  # skips the failed/ + reserved/ subdirectories
         try:
-            with open(os.path.join(directory, filename)) as fh:
+            with open(os.path.join(directory, filename), encoding="utf-8") as fh:
                 job = json.load(fh)
         except (json.JSONDecodeError, OSError):
             continue  # skip corrupt files

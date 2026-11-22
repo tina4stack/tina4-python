@@ -603,7 +603,7 @@ def _record_broken_import(py_file: Path, error: Exception) -> None:
             "type": "auto_discover_failure",
             "file": str(py_file),
             "error": f"{type(error).__name__}: {error}",
-        }))
+        }), encoding="utf-8")
     except Exception:
         # If even the .broken write fails we already logged the original error.
         pass
@@ -3838,10 +3838,10 @@ def _write_broken(request: Request, error: Exception):
     for existing in broken_dir.glob("*.broken"):
         if error_type in existing.name:
             try:
-                data = json.loads(existing.read_text())
+                data = json.loads(existing.read_text(encoding="utf-8"))
                 data["last_seen"] = ts.isoformat()
                 data["occurrence_count"] = data.get("occurrence_count", 1) + 1
-                existing.write_text(json.dumps(data, indent=2))
+                existing.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 return
             except Exception:
                 pass
@@ -3867,7 +3867,7 @@ def _write_broken(request: Request, error: Exception):
         "resolved": False,
     }
 
-    (broken_dir / filename).write_text(json.dumps(data, indent=2))
+    (broken_dir / filename).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _find_production_server():

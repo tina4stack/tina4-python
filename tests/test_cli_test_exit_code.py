@@ -29,6 +29,8 @@ returned 0 regardless — that is what makes this a genuine lock-in.
 import subprocess
 import sys
 
+from conftest import anchor_pytest_project
+
 # A fresh interpreter that runs the real CLI `main` with `test` as the command.
 _RUN_CLI = (
     "import sys; "
@@ -43,6 +45,7 @@ def _write_project(project_dir, test_body):
     tests_dir = project_dir / "tests"
     tests_dir.mkdir()
     (tests_dir / "test_sample.py").write_text(test_body, encoding="utf-8")
+    anchor_pytest_project(project_dir)
 
 
 def _run_tina4_test(project_dir):
