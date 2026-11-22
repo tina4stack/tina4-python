@@ -20,7 +20,7 @@ separate worktree, same venv recipe, same command:
 - [x] Parity: check each framework bug in PHP, Ruby and Node (measured, not read)
 - [x] Full Windows run; compare with the baseline per test (JUnit XML)
 - [x] PR against v3 (DCO sign-off): tina4stack/tina4-python#332
-- [ ] Linux CI green on the PR HEAD
+- [x] Linux CI green on the PR HEAD (255e11d9: every check passes; the four pytest groups 0 failed)
 
 ## Parity
 | # | Framework bug (Windows) | Python | PHP | Ruby | Node |
@@ -66,7 +66,8 @@ separate worktree, same venv recipe, same command:
 |---|---|
 | origin/v3 @ bf16cdc4 (pristine worktree) | 138 failed, 84 errors, 6242 passed, 974 skipped |
 | branch @ 10f31ab7 | 7 failed, 0 errors, 6450 passed, 985 skipped |
-| branch @ ac4a3864 | **0 failed, 0 errors, 6459 passed, 985 skipped** |
+| branch @ ac4a3864 | 0 failed, 0 errors, 6459 passed, 985 skipped |
+| branch @ 255e11d9 (PR HEAD) | **0 failed, 0 errors, 6475 passed, 985 skipped** (+16 = test_batch_spawn.py) |
 
 Per-test comparison, baseline vs ac4a3864 (JUnit XML): 0 pass→fail, 0 pass→skip, 0 pass→missing; 207 fail→pass; 12 fail→skip, every one a tagged Windows impossibility that still runs on Linux (7 `[needs:symlink-privilege]`, SIGINT x2, SIGHUP, pty); 2 renamed (short param ids) and 8 new tests, all passing.
 
@@ -81,9 +82,9 @@ Every remaining skip is a service this box does not run (PostgreSQL/PostGIS, MyS
 - [x] (5) migration lock absent on Windows
 - [x] (6) locale-codepage JSON/text I/O
 - [x] (7) `\` in the migration envelope
-- [ ] PHP (1): tina4stack/tina4-php#374 (open)
+- [ ] PHP (1): tina4stack/tina4-php#374 (open, CI green; Windows drain bound via the execution-time limit, with its limits stated in the PR)
 - [ ] Node (1): tina4stack/tina4-nodejs#213 (open, CI green)
-- [ ] Ruby (3): tina4stack/tina4-ruby#187 (open)
+- [ ] Ruby (3): tina4stack/tina4-ruby#187 (open, code commit CI green)
 - Found by the Node work, not fixed here: tina4-nodejs binds `::1` before arming SIGTERM/SIGINT (a SIGTERM in that gap kills without a drain).
 - Not fixed here (out of scope, recorded): a stray `%TEMP%\pyproject.toml` on this box (a copy of tina4-python 3.13.163's) that any tmp-dir pytest climbs to; `tests/test_static.py` imports `unittest.mock.patch` (unused, pre-existing); Ruby dev-admin `command -v` / `2>/dev/null` under cmd.exe.
 
@@ -91,6 +92,6 @@ Every remaining skip is a service this box does not run (PostgreSQL/PostGIS, MyS
 - b9fbd01c  test: portable child-server spawn and signalling on Windows; built-in server drains on Windows
 - 10f31ab7  fix: Windows framework bugs found by the Windows test run; portable test harness
 - ac4a3864  fix: UTF-8 for every JSON/text file the framework reads or writes; "/" paths in the migration envelope
-- (next)    refactor batch_spawn under the metrics gate; pure escaping tests; this plan
+- 255e11d9  refactor(batch_spawn): split PATHEXT lookup under the metrics gate; pure escaping tests; plan
 
-## Status: In Progress
+## Status: Complete for Python (tina4stack/tina4-python#332). Sibling PRs open, awaiting review.
