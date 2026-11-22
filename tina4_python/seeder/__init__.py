@@ -16,6 +16,7 @@ Generate realistic fake data for testing and development.
 
     seed_table(db, "users", 50, {"name": fake.name, "email": fake.email})
 """
+import os
 import random
 import string
 import hashlib
@@ -103,6 +104,19 @@ def _is_product_table(table: str) -> bool:
     return any(hint in (table or "").lower() for hint in _PRODUCT_TABLE_HINTS)
 
 
+class SeedError(Exception):
+    """A seed file raised, so the seed run stopped at it (ADR-0108).
+
+    ``seed_file`` is the failing seed file, ``completed`` the files that ran before
+    it, and ``__cause__`` the original error.
+    """
+
+    def __init__(self, seed_file: str, completed: list, cause: BaseException):
+        self.seed_file = seed_file
+        self.completed = list(completed)
+        super().__init__(f"Seed file failed: {os.path.basename(seed_file)}: {cause}")
+
+
 class FakeData:
     """Fake data generator with deterministic seeding.
 
@@ -138,14 +152,24 @@ class FakeData:
         """Run a generator function `count` times and return the results."""
         return [fn() for _ in range(count)]
 
-    def seed_dir(self, seed_folder: str = "seeds") -> list:
-        """Run all Python seed files in the given folder (sorted, skipping
-        files starting with ``_``). Returns the list of files executed."""
-        import os
+    def seed_dir(self, seed_folder: str = "seeds", db=None) -> list:
+        """Run the Python seed files in ``seed_folder`` in name order, skipping
+        files that start with ``_``. A module's ``run(db)`` (the shape
+        ``generate seeder`` writes) is called with ``db``, or with the database
+        bound via ``bind_database`` when none is passed.
+
+        Returns the files executed, in order. A seed file that raises stops the
+        run: it is logged and a :class:`SeedError` naming it is raised, and no
+        later file runs (ADR-0108).
+        """
         import importlib.util
+        from tina4_python.debug import Log  # lazy import to avoid circular deps
 
         if not os.path.isdir(seed_folder):
             return []
+        if db is None:
+            from tina4_python.orm import model as orm_model
+            db = orm_model._database
         files = sorted(
             f for f in os.listdir(seed_folder)
             if f.endswith(".py") and not f.startswith("_")
@@ -155,12 +179,16 @@ class FakeData:
             path = os.path.join(seed_folder, name)
             try:
                 spec = importlib.util.spec_from_file_location(name[:-3], path)
-                if spec and spec.loader:
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                executed.append(path)
-            except Exception:
-                pass
+                module = importlib.util.module_from_spec(spec)
+                module.db = db
+                spec.loader.exec_module(module)
+                run = getattr(module, "run", None)
+                if callable(run):
+                    run(db)
+            except Exception as error:
+                Log.error(f"Seeder: {name} failed, seeding stopped: {error}")
+                raise SeedError(path, executed, error) from error
+            executed.append(path)
         return executed
 
     def name(self) -> str:

@@ -995,27 +995,27 @@ def _seed(args):
         print("No src/seeds/ directory found.")
         return
 
-    import importlib.util
     from tina4_python.database import Database
+    from tina4_python.seeder import FakeData, SeedError
 
     db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     sys.path.insert(0, str(Path.cwd()))
 
-    ran = 0
-    for seed_file in sorted(seed_dir.glob("*.py")):
-        if seed_file.name.startswith("_"):
-            continue
-        print(f"  Seeding: {seed_file.name}")
-        spec = importlib.util.spec_from_file_location(seed_file.stem, str(seed_file))
-        module = importlib.util.module_from_spec(spec)
-        module.db = db
-        spec.loader.exec_module(module)
-        if hasattr(module, "run"):
-            module.run(db)
-        ran += 1
-    db.close()
-    print(f"\n{ran} seeder(s) executed.")
+    # ADR-0108: the first seed file that raises stops the run and exits 1, so
+    # a failed seeder fails `tina4 seed` (the client propagates the code).
+    try:
+        executed = FakeData().seed_dir(str(seed_dir), db=db)
+    except SeedError as error:
+        for path in error.completed:
+            print(f"  Seeded: {Path(path).name}")
+        print(f"  {error}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        db.close()
+    for path in executed:
+        print(f"  Seeded: {Path(path).name}")
+    print(f"\n{len(executed)} seeder(s) executed.")
 
 
 def _routes(args):
