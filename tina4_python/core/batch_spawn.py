@@ -67,17 +67,30 @@ def find_executable(name: str, platform: str | None = None) -> str:
     A name with a directory or an extension, any other platform, and a name that
     is not found come back unchanged, so the spawn reports its own error.
     """
-    if (platform or sys.platform) != "win32" or "/" in name or "\\" in name or os.path.splitext(name)[1]:
+    if (platform or sys.platform) != "win32" or not _is_bare_name(name):
         return name
-    exts = [e for e in (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(";") if e]
-    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
-        if not directory:
-            continue
-        for ext in exts:  # PATH order first, then PATHEXT order, as cmd.exe does
+    return _search_path(name) or name
+
+
+def _is_bare_name(name: str) -> bool:
+    """No directory part and no extension: the only form PATHEXT applies to."""
+    return "/" not in name and "\\" not in name and not os.path.splitext(name)[1]
+
+
+def _search_path(name: str) -> str | None:
+    """The first PATH entry holding name + a PATHEXT extension, as cmd.exe
+    searches: PATH order first, then PATHEXT order within each directory."""
+    for directory in _env_list("PATH", os.pathsep, ""):
+        for ext in _env_list("PATHEXT", ";", ".COM;.EXE;.BAT;.CMD"):
             candidate = os.path.join(directory, name + ext.lower())
             if os.path.isfile(candidate):
                 return candidate
-    return name
+    return None
+
+
+def _env_list(variable: str, separator: str, default: str) -> list[str]:
+    """The non-empty entries of a separator-joined environment variable."""
+    return [entry for entry in (os.environ.get(variable) or default).split(separator) if entry]
 
 
 def run_allowing_batch(argv, **kwargs) -> subprocess.CompletedProcess:
