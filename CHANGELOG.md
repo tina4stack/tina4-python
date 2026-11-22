@@ -9,6 +9,18 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.165 - 2026-11-22
+
+### Fixed
+
+- Windows: the broken-import marker name drops the drive letter's colon. It kept `C:` in the filename, so NTFS wrote an alternate data stream and the `data/.broken/*.broken` listing that `/health` reads never found the marker (#328; same rule in tina4-php#372, tina4-ruby#183, tina4-nodejs#211).
+- Windows: ProjectIndex keys, entry paths and the reported index path always use `/`, matching PHP; they used `\` on Windows (#328).
+- `tina4python migrate:create add things` writes `<ts>_add_things.sql`, not `<ts>_add things.sql`. The CLI slugs the description the way `create_migration()`, the MCP `migration_create` tool and the other three frameworks do. A description with no letter or digit is refused with the usage message instead of writing `<ts>_.sql`; existing migration files are untouched (#329).
+
+### Changed
+
+- AI skills: tina4-developer-python carries `updated_for_version: 3.13.165`. Its content changed in 3.13.164 while the field still said 3.13.147, so an older install reported itself current; it now reports itself out of date.
+
 ## 3.13.164 - 2026-11-17
 
 ### Fixed
