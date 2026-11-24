@@ -105,36 +105,54 @@ def _ends_a_port(line: str, end: int) -> bool:
     return False
 
 
+def _after_bracketed_host(line: str, start: int) -> int:
+    """Skip a bracketed IPv6 host: its colons are not a password's."""
+    if line.startswith("[", start):
+        close = line.find("]", start)
+        if close != -1:
+            return close + 1
+    return start
+
+
+def _could_be_user(text: str) -> bool:
+    """Rule 2: a `/ ? #`, an `@` or whitespace before the `:` is not a user."""
+    return not any(ch in _NOT_A_USER or ch.isspace() for ch in text)
+
+
+def _token_end(line: str, begin: int) -> int:
+    """Where the port-or-password token starting at ``begin`` ends."""
+    end = begin
+    while end < len(line) and line[end] not in _PORT_END and not line[end].isspace():
+        end += 1
+    return end
+
+
+def _hostless_password_end(line: str, begin: int):
+    """Rule 4: with no `@`, where the password starting at ``begin`` ends -
+    the end of the line, or a trailing `?key=value` query - or None when the
+    token there is a port (see KNOWN LIMIT above) or empty."""
+    end = _token_end(line, begin)
+    token = line[begin:end]
+    if token == "" or (token.isdigit() and token.isascii() and _ends_a_port(line, end)):
+        return None
+    query = line.rfind("?", begin)
+    if query != -1 and _KEPT_QUERY.fullmatch(line, query):
+        return query
+    return len(line)
+
+
 def _password_span(line: str, start: int):
     """(begin, end) of the password in ``line`` whose authority starts at
     ``start``, or None when there is none. The rule is described above."""
-    i = start
-    if line.startswith("[", i):
-        # A bracketed IPv6 host carries colons that are not a password's.
-        close = line.find("]", i)
-        if close != -1:
-            i = close + 1
-    colon = line.find(":", i)
-    if colon == -1:
-        return None
-    if any(ch in _NOT_A_USER or ch.isspace() for ch in line[i:colon]):
+    user_start = _after_bracketed_host(line, start)
+    colon = line.find(":", user_start)
+    if colon == -1 or not _could_be_user(line[user_start:colon]):
         return None
     at = line.rfind("@", colon + 1)
     if at != -1:
-        return colon + 1, at
-    end = colon + 1
-    while end < len(line) and line[end] not in _PORT_END and not line[end].isspace():
-        end += 1
-    token = line[colon + 1:end]
-    if token == "":
-        return None
-    if token.isdigit() and token.isascii() and _ends_a_port(line, end):
-        return None  # a port (see KNOWN LIMIT above)
-    stop = len(line)
-    query = line.rfind("?", colon + 1)
-    if query != -1 and _KEPT_QUERY.fullmatch(line, query):
-        stop = query
-    return colon + 1, stop
+        return colon + 1, at  # rule 3: userinfo ends at the LAST `@`
+    end = _hostless_password_end(line, colon + 1)
+    return None if end is None else (colon + 1, end)
 
 
 def _redact_line(line: str) -> str:
@@ -238,22 +256,23 @@ def _split_userinfo(url: str, label: str):
     return match.group(1), userinfo, host_part
 
 
-def parse_url(url: str, label: str = "Connection URL") -> UrlParts:
-    """Split a ``scheme://user:password@host:port/path?query`` URL.
+def _decode_userinfo(userinfo: "str | None"):
+    """(username, password), percent-DECODED; None for an absent part, and ""
+    for an explicitly empty password (`user:@host`)."""
+    if userinfo is None:
+        return None, None
+    user, colon, secret = userinfo.partition(":")
+    return (unquote(user) if user else None), (unquote(secret) if colon else None)
 
-    Never puts the value, or any part of the userinfo, in an error, and never
-    chains a stdlib error that quotes it (no ``__cause__``, no ``__context__``).
+
+def _parse_host_part(scheme: str, host_part: str, label: str, had_userinfo: bool):
+    """(parsed, hostname, port) of the part after the userinfo.
+
+    The error is raised OUTSIDE the except block. `raise ... from None` only
+    SUPPRESSES the context: the stdlib error (which quotes the token) still
+    rides along as `__context__` for a debugger, a traceback renderer or the
+    dev error overlay to print. Measured: it did, for `driver://u:Pq1Rs2`.
     """
-    scheme, userinfo, host_part = _split_userinfo(url, label)
-    username = password = None
-    if userinfo is not None:
-        user, colon, secret = userinfo.partition(":")
-        username = unquote(user) if user else None
-        password = unquote(secret) if colon else None
-    # The error is raised OUTSIDE the except block. `raise ... from None` only
-    # SUPPRESSES the context: the stdlib error (which quotes the token) still
-    # rides along as `__context__` for a debugger, a traceback renderer or the
-    # dev error overlay to print. Measured: it did, for `driver://u:Pq1Rs2`.
     reason = None
     try:
         parsed = urlparse(f"{scheme}://{host_part}")
@@ -261,19 +280,41 @@ def parse_url(url: str, label: str = "Connection URL") -> UrlParts:
         port = parsed.port
     except ValueError as error:
         reason = str(error)
-    if reason is not None:
-        if userinfo is not None:
-            # The host part is everything after the LAST `@`, so the stdlib's
-            # text (e.g. "Port could not be cast to integer value as
-            # 'notaport'") cannot hold the password - it names the bad token.
-            raise ValueError(f"{label}: Invalid URL - {reason}")
-        # No `@`: the "port" may BE the password (`driver://user:password`).
-        raise ValueError(
-            f"{label}: Invalid URL - the host or port is malformed "
-            f"(a port must be a number from 0 to 65535). {_NOT_SHOWN}"
-        )
+    if reason is None:
+        return parsed, hostname, port
+    if had_userinfo:
+        # The host part is everything after the LAST `@`, so the stdlib's
+        # text (e.g. "Port could not be cast to integer value as
+        # 'notaport'") cannot hold the password - it names the bad token.
+        raise ValueError(f"{label}: Invalid URL - {reason}")
+    # No `@`: the "port" may BE the password (`driver://user:password`).
+    raise ValueError(
+        f"{label}: Invalid URL - the host or port is malformed "
+        f"(a port must be a number from 0 to 65535). {_NOT_SHOWN}"
+    )
+
+
+def parse_url(url: str, label: str = "Connection URL") -> UrlParts:
+    """Split a ``scheme://user:password@host:port/path?query`` URL.
+
+    Never puts the value, or any part of the userinfo, in an error, and never
+    chains a stdlib error that quotes it (no ``__cause__``, no ``__context__``).
+    """
+    scheme, userinfo, host_part = _split_userinfo(url, label)
+    username, password = _decode_userinfo(userinfo)
+    parsed, hostname, port = _parse_host_part(scheme, host_part, label, userinfo is not None)
     return UrlParts(scheme.lower(), username, password, hostname, port,
                     parsed.path or "", parsed.query or "", parsed.fragment or "")
+
+
+def url_query(url: str) -> str:
+    """The query of a connection URL by the shared rule, or "" when the URL
+    does not parse (the connect path then reports that, generically). A
+    password holding `?` never becomes the query, as it did with urlparse."""
+    try:
+        return parse_url(url, "Database").query
+    except ValueError:
+        return ""
 
 
 def normalise_url(url: str, label: str = "Connection URL") -> str:

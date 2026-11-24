@@ -15,7 +15,7 @@ Requires: pip install firebird-driver  (or pip install fdb for legacy)
 import os
 import re
 from urllib.parse import unquote, parse_qs
-from tina4_python.database.database_url import parse_url, url_credentials
+from tina4_python.database.database_url import parse_url, url_credentials, url_query
 from tina4_python.database.adapter import (
     DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     call_with_deadline, connect_deadline,
@@ -94,13 +94,8 @@ def _resolve_firebird_charset(connection_string: str, kwarg_charset: str | None 
     connection is opened, so it is unit-testable without a live server.
     """
     url_charset = None
-    # The shared rule (GHSA-h2mr-m3v3-cq8c): a password holding `?` no longer
-    # turns into this query. An unparseable URL has no charset to offer; the
-    # connect path reports it (generically) right after.
-    try:
-        query = parse_url(connection_string, "Database").query
-    except ValueError:
-        query = ""
+    # The shared rule (GHSA-h2mr-m3v3-cq8c): a password holding `?` is not a query.
+    query = url_query(connection_string)
     if query:
         values = parse_qs(query).get("charset")
         if values:
