@@ -33,7 +33,7 @@ import time
 
 import pytest
 
-from conftest import boot_child_server, read_child_log
+from conftest import boot_child_server, process_rss_mb, read_child_log
 from tina4_python.core.response import Response
 
 LIMIT = 1_048_576          # TINA4_MAX_UPLOAD_SIZE for every server here
@@ -211,9 +211,7 @@ def _body_413(size: int) -> bytes:
 
 
 def _rss_megabytes(pid: int) -> float:
-    out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)],
-                         capture_output=True, text=True, check=False).stdout.strip()
-    return int(out) / 1024 if out else 0.0
+    return process_rss_mb(pid)
 
 
 def _assert_serving(port):
@@ -446,7 +444,9 @@ class TestBuiltinServer:
     @pytest.mark.parametrize("raw", [
         b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Big: " + b"a" * 9000 + b"\r\n\r\n",
         b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Big: " + b"a" * 200_000,
-    ])
+    ], ids=["complete-9KB-header", "unterminated-200KB-header"])
+    # Short ids: pytest exports the node id in PYTEST_CURRENT_TEST, and an id
+    # holding the 200KB header is over Windows' 32767-character variable limit.
     def test_an_oversized_header_block_answers_431(self, server, raw):
         _proc, port = server
         answer = _exchange(port, raw)

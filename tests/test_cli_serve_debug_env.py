@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import socket
 import subprocess
 import sys
@@ -22,6 +21,8 @@ import urllib.error
 import urllib.request
 
 import pytest
+
+from conftest import kill_process_tree, send_graceful_shutdown, spawn_kwargs
 
 SECRET = "cli-serve-debug-secret-0123456789abcdef"
 
@@ -62,14 +63,10 @@ def _poll_dev(port: int, settle: float = 5.0) -> int:
 
 def _terminate(proc: subprocess.Popen) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         proc.wait(timeout=10)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=5)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            pass
+    except (ProcessLookupError, OSError, subprocess.TimeoutExpired):
+        kill_process_tree(proc)
 
 
 def _dev_status(tmp_path, env_file: str | None, *flags: str) -> int:
@@ -113,7 +110,7 @@ def _dev_status(tmp_path, env_file: str | None, *flags: str) -> int:
                 [sys.executable, "-c", "from tina4_python.cli import main; main()",
                  "serve", "--no-browser", "--no-reload", "--host", "127.0.0.1", "--port", str(port), *flags],
                 cwd=root, env=env, stdout=log_fh, stderr=subprocess.STDOUT,
-                start_new_session=True,
+                **spawn_kwargs(new_session=True),
             )
         try:
             deadline = time.time() + 30

@@ -18,6 +18,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
@@ -850,18 +851,54 @@ def _file_lock_path(migration_folder: str) -> str:
     return os.path.join(tempfile.gettempdir(), f"tina4-migration-{digest}.lock")
 
 
+def _lock_exclusive(handle) -> None:
+    """Block until this process holds the exclusive lock on ``handle``.
+
+    POSIX: flock(). Windows has no fcntl, and the import failure used to drop
+    every Windows worker into running UNLOCKED, so concurrent startup migrations
+    on SQLite/Firebird each applied every migration (#277 again; 7 of 8 workers
+    applied the same data migration). msvcrt.locking on the file's first byte
+    is the Windows equivalent (LockFileEx underneath, released when the process
+    exits); PHP's and Ruby's flock() use the same OS lock there. LK_LOCK gives up
+    after ten one-second retries, so keep waiting, as flock() does.
+    """
+    if sys.platform != "win32":
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    import errno
+    import msvcrt
+    handle.seek(0)
+    while True:
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            return
+        except OSError as exc:
+            if exc.errno not in (errno.EDEADLOCK, errno.EACCES):
+                raise
+
+
+def _unlock(handle) -> None:
+    if sys.platform != "win32":
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    import msvcrt
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def _acquire_file_lock(migration_folder: str):
     """OS advisory file lock on a sidecar — the portable fallback (crash-safe: the
-    kernel drops it when the process exits). On a platform without fcntl (Windows)
-    this raises on import and degrades to running unlocked rather than blocking boot.
+    kernel drops it when the process exits). A lock that cannot be taken at all
+    degrades to running unlocked rather than blocking boot.
     """
     try:
-        import fcntl  # POSIX only; the lab and every target server are POSIX
         path = _file_lock_path(migration_folder)
         # Open for append-create: the file is only ever a lock target, nothing is
         # written to it, and we must not truncate a sidecar a holder is using.
-        handle = open(path, "a")
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle = open(path, "a", encoding="utf-8")
+        _lock_exclusive(handle)
         return ("file", handle)
     except Exception as exc:
         logger.debug(f"file migration lock unavailable: {exc}; running unlocked")
@@ -880,9 +917,8 @@ def _release_migration_lock(db, handle) -> None:
                 f"EXEC sp_releaseapplock @Resource = '{_MIGRATION_LOCK_NAME}', @LockOwner = 'Session'"
             )
         elif kind == "file" and resource is not None:
-            import fcntl
             try:
-                fcntl.flock(resource.fileno(), fcntl.LOCK_UN)
+                _unlock(resource)
             finally:
                 resource.close()
     except Exception as exc:

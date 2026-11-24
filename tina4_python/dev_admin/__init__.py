@@ -755,7 +755,7 @@ def _current_rss_mb() -> float:
         return round(psutil.Process().memory_info().rss / 1024.0 / 1024.0, 2)
     except Exception:
         pass
-    with open("/proc/self/status") as fh:
+    with open("/proc/self/status", encoding="utf-8") as fh:
         for line in fh:
             if line.startswith("VmRSS:"):
                 return round(int(line.split()[1]) / 1024.0, 2)
@@ -852,7 +852,7 @@ def _read_queue_dir(directory: str, status: str = None) -> list:
         if not filename.endswith(".queue-data"):
             continue  # skips the failed/ + reserved/ subdirectories
         try:
-            with open(os.path.join(directory, filename)) as fh:
+            with open(os.path.join(directory, filename), encoding="utf-8") as fh:
                 job = json.load(fh)
         except (json.JSONDecodeError, OSError):
             continue  # skip corrupt files
@@ -2983,6 +2983,9 @@ async def _api_deps_install(request, response):
         return response({"error": "name required"}, 400)
 
     import shutil
+    # npm, composer, bundle and gem are batch files on Windows: resolve them with
+    # PATHEXT and escape the request-supplied name/version for cmd.exe.
+    from tina4_python.core.batch_spawn import run_allowing_batch
 
     try:
         if registry == "pypi":
@@ -2993,7 +2996,7 @@ async def _api_deps_install(request, response):
                 cmd = ["uv", "add", *(["--dev"] if dev else []), pkg]
             else:
                 cmd = ["pip", "install", pkg]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = run_allowing_batch(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": (result.stderr or result.stdout).strip()}, 500)
             return response({"message": f"Installed {name} {version}".strip(), "output": result.stdout or result.stderr})
@@ -3001,7 +3004,7 @@ async def _api_deps_install(request, response):
         elif registry == "npm":
             pkg = f"{name}@{version}" if version else name
             cmd = ["npm", "install", *(["--save-dev"] if dev else []), pkg]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = run_allowing_batch(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": result.stderr.strip()}, 500)
             return response({"message": f"Installed {name}", "output": result.stdout})
@@ -3009,7 +3012,7 @@ async def _api_deps_install(request, response):
         elif registry == "packagist":
             pkg = f"{name}:{version}" if version else name
             cmd = ["composer", "require", *(["--dev"] if dev else []), pkg]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = run_allowing_batch(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": result.stderr.strip()}, 500)
             return response({"message": f"Installed {name}", "output": result.stdout})
@@ -3024,7 +3027,7 @@ async def _api_deps_install(request, response):
                     cmd += ["--group", "development"]
             else:
                 cmd = ["gem", "install", name, *(["-v", version] if version else [])]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = run_allowing_batch(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": result.stderr.strip()}, 500)
             return response({"message": f"Installed {name}", "output": result.stdout})

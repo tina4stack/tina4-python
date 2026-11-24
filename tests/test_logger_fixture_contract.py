@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 
@@ -477,6 +478,8 @@ def test_embedded_line_breaks_cannot_inject_records(tmp_path):
     assert entry["message"] == message  # JSON's own escaping keeps the real bytes
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="[needs:os=posix] the pty module needs termios; Python opens no pty on Windows")
 def test_ansi_exists_only_on_interactive_text_stdout(tmp_path, capsys):
     import pty
     import sys

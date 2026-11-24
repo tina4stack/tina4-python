@@ -15,7 +15,7 @@ import sys
 import tempfile
 import pytest
 
-from conftest import child_pythonpath
+from conftest import anchor_pytest_project, child_pythonpath
 from pathlib import Path
 from tina4_python.cli import (
     _parse_fields, _parse_flags, _to_snake, _to_table,
@@ -651,6 +651,7 @@ class TestCrudGeneratedTestPasses:
         env.pop("TINA4_API_KEY", None)
         # Isolate the child pytest's tmp base so its retention cleanup cannot
         # delete the parent run's active numbered dir (FileNotFoundError cascade).
+        anchor_pytest_project(tmp_project)
         child_tmp = tempfile.mkdtemp(prefix="tina4-cligen-pytmp-")
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = child_tmp
         try:
@@ -1130,6 +1131,7 @@ class TestGeneratedRouteTestStaysGreenWhenFilled:
 
         env = {**os.environ, "PYTHONPATH": child_pythonpath(str(tmp_project))}
 
+        anchor_pytest_project(tmp_project)
         # 1) As the scaffold stub — green.
         r1 = subprocess.run([sys.executable, "-m", "pytest", str(test_file), "-q"],
                             cwd=tmp_project, env=env, capture_output=True, text=True)

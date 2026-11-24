@@ -282,6 +282,9 @@ class TestAMissingDriverHasOneOutcomeInAllFour:
                 "PYTHONPATH": str(repo_root),
                 "TINA4_MONGO_URI": uri,
                 "TINA4_DOC_STORE_PATH": str(store_path),
+                # Windows cannot start Winsock (so cannot import asyncio)
+                # without SYSTEMROOT. It carries no Python packages.
+                **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
             },
         )
         assert "__PROBE__" in completed.stdout, (

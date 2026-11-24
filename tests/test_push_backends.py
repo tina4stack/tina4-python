@@ -16,6 +16,7 @@ On a Linux host (the deploy target) and on this Mac both backends are present, s
 every check runs. A host that genuinely lacks one backend skips only the
 comparison it cannot make, never an assertion it could have run.
 """
+import ctypes.util
 import os
 import sys
 
@@ -43,7 +44,13 @@ def _reset_backend_cache():
 
 # ---- backend selection -----------------------------------------------------
 def test_libcrypto_is_available_and_preferred_on_the_server():
-    if sys.platform == "win32":
+    # Windows: present on current Windows 11 (C:\Windows\System32\libcrypto.dll,
+    # which loads and passes the known-answer self-test), absent on older
+    # builds. Absent must be a clean BackendUnavailable; present takes the same
+    # path as a server below.
+    if sys.platform == "win32" and not (
+        ctypes.util.find_library("crypto") or ctypes.util.find_library("libcrypto")
+    ):
         with pytest.raises(_base.BackendUnavailable):
             _libcrypto.load()
         return

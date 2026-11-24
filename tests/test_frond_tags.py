@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import needs_symlinks
 from tina4_python.frond import Frond
 
 # A marker only ever written to a file OUTSIDE the templates dir. If it ever
@@ -100,6 +101,7 @@ class TestFrondTagsConfinement:
         finally:
             shutil.rmtree(base, ignore_errors=True)
 
+    @needs_symlinks
     def test_a_symlink_escaping_the_templates_dir_is_refused(self):
         base, templates, outside_file = _make_tree()
         try:

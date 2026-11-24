@@ -577,7 +577,8 @@ def register_dev_tools(server):
                 if (existing_slug == slug
                         or existing_slug == slug + "_table"
                         or slug == existing_slug + "_table"):
-                    existing.append(str(p.relative_to(project_root)))
+                    # "/" on every OS: the envelope is a cross-framework wire contract.
+                    existing.append(p.relative_to(project_root).as_posix())
             if existing:
                 return {
                     "ok": False,
@@ -682,7 +683,7 @@ def register_dev_tools(server):
         sessions = []
         for f in session_dir.glob("*.json"):
             try:
-                data = json.loads(f.read_text())
+                data = json.loads(f.read_text(encoding="utf-8"))
                 sessions.append({"id": f.stem, "data": data})
             except (json.JSONDecodeError, OSError):
                 sessions.append({"id": f.stem, "error": "corrupt"})
@@ -724,7 +725,7 @@ def register_dev_tools(server):
         log_file = Path("logs/debug.log")
         if not log_file.exists():
             return []
-        all_lines = log_file.read_text(errors="replace").splitlines()
+        all_lines = log_file.read_text(errors="replace", encoding="utf-8").splitlines()
         return all_lines[-lines:]
 
     def error_log(limit: int = 20) -> list:

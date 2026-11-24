@@ -42,7 +42,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import boot_child_server, read_child_log
+from conftest import (IS_WINDOWS, boot_child_server, kill_process_tree, read_child_log,
+                      send_graceful_shutdown)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -60,7 +61,8 @@ VERY_SLOW_SECONDS = 5.0
 # ── the child application under test ──────────────────────────────────────
 
 def _app_source(port: int, *, background_task: bool = False,
-                websocket_route: bool = False, database: str = "") -> str:
+                websocket_route: bool = False, database: str = "",
+                stop_route: bool = False) -> str:
     """Source for a real Tina4 app exposing the routes each case needs.
 
     /slow      — takes SLOW_SECONDS, then answers 200 "drained"
@@ -131,6 +133,18 @@ def _app_source(port: int, *, background_task: bool = False,
             "@websocket('/ws/probe')",
             "async def probe(connection, event, data):",
             "    pass",
+            "",
+        ]
+    if stop_route:
+        # /stop calls the public stop() from ANOTHER thread, the way an app's
+        # admin endpoint or a supervisor thread would, a beat after answering.
+        lines += [
+            "import threading, time as _stop_time",
+            "from tina4_python.core.server import stop",
+            "@get('/stop')",
+            "async def stop_route(request, response):",
+            "    threading.Thread(target=lambda: (_stop_time.sleep(0.2), stop()), daemon=True).start()",
+            "    return response('stopping')",
             "",
         ]
     lines.append(f"start(port={port}, no_browser=True, no_reload=True)")
@@ -216,17 +230,8 @@ def _assert_served_by(log: str, expected: str):
 
 
 def _reap(proc):
-    """Kill the whole process GROUP. Safe because the child is a group leader."""
-    if proc is None:
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
-        proc.wait(timeout=10)
-    except Exception:
-        pass
+    """Kill the whole process GROUP (POSIX) or tree (Windows); the child leads it."""
+    kill_process_tree(proc)
 
 
 # ── real socket helpers ───────────────────────────────────────────────────
@@ -276,7 +281,9 @@ def _connect_refused(port: int, budget: float):
     handshake_resets = 0
     while True:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+            # 3 s outlasts Windows' ~2 s refusal of a closed loopback port; on
+            # POSIX the refusal is immediate, so the timeout never matters.
+            with socket.create_connection(("127.0.0.1", port), timeout=3.0):
                 pass
         except ConnectionResetError as exc:
             # The listener closed while THIS handshake was in flight, and the
@@ -305,7 +312,7 @@ def test_sigterm_lets_the_in_flight_request_finish(tmp_path):
         proc, port = _boot(tmp_path)
         sock = _begin_request(port, "/slow")
         time.sleep(SIGNAL_AFTER_SECONDS)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
 
         raw = _read_all(sock).decode(errors="replace")
         assert raw.startswith("HTTP/1.1 200"), f"in-flight request was cut short: {raw!r}"
@@ -322,14 +329,18 @@ def test_sigterm_stops_accepting_new_connections(tmp_path):
         proc, port = _boot(tmp_path)
         # Hold a request open so the process is still alive (draining) while we
         # probe the listener — otherwise "refused" could just mean "exited".
-        sock = _begin_request(port, "/slow")
+        # /very-slow, not /slow: Windows answers a connect to a CLOSED loopback
+        # port only after ~2 s of SYN retries, so the drain has to outlast that
+        # or "refused" would arrive after the server had already exited.
+        sock = _begin_request(port, "/very-slow")
         time.sleep(SIGNAL_AFTER_SECONDS)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
 
         # The listener must close FIRST, not at the END of the drain. Budget
-        # half the remaining drain: closing first takes milliseconds, closing
-        # last takes the whole 1.4s, so the two outcomes are never confusable.
-        drain_remaining = SLOW_SECONDS - SIGNAL_AFTER_SECONDS
+        # half the remaining drain: closing first is refused within one connect
+        # (instantly on POSIX, ~2 s on Windows), closing last takes the whole
+        # 4.4 s, so the two outcomes are never confusable.
+        drain_remaining = VERY_SLOW_SECONDS - SIGNAL_AFTER_SECONDS
         refusal, waited = _connect_refused(port, budget=drain_remaining / 2)
         assert proc.poll() is None, (
             "server exited before the drain finished — this case has to probe a "
@@ -356,7 +367,7 @@ def test_sigterm_exits_with_code_0(tmp_path):
     proc = None
     try:
         proc, port = _boot(tmp_path)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=15)
         assert proc.returncode == 0, (
             f"a handled SIGTERM must halt 0 (gunicorn and Puma both do); "
@@ -415,7 +426,7 @@ def test_sigterm_releases_the_listening_port(tmp_path):
 
         sock = _begin_request(port, "/slow")
         time.sleep(SIGNAL_AFTER_SECONDS)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _read_all(sock)
         _wait_for_exit(proc, timeout=15)
 
@@ -425,6 +436,43 @@ def test_sigterm_releases_the_listening_port(tmp_path):
         _reap(proc)
 
 
+# Windows cannot deliver SIGINT (CTRL_C_EVENT) to one child: a console process
+# group created for it has Ctrl+C disabled, and group 0 would interrupt pytest
+# too. Its graceful path is driven by CTRL_BREAK_EVENT (the SIGTERM cases above).
+_NEEDS_POSIX_SIGINT = pytest.mark.skipif(
+    IS_WINDOWS, reason="[needs:os=posix] Windows cannot send SIGINT to a single child process")
+
+
+def test_stop_runs_the_same_graceful_shutdown(tmp_path):
+    """stop() drains the in-flight request and exits 0, on every OS.
+
+    stop() is documented as a graceful stop. On Windows it used to call
+    os.kill(own_pid, SIGTERM), which there is TerminateProcess: the process died
+    at once with exit code 15, cutting the in-flight request off. Mutation:
+    restore that call on Windows and this goes red (empty response, exit 15).
+    """
+    proc = None
+    try:
+        proc, port = _boot(tmp_path, stop_route=True)
+        sock = _begin_request(port, "/slow")
+        time.sleep(SIGNAL_AFTER_SECONDS)
+        stopper = _begin_request(port, "/stop")
+        assert b"stopping" in _read_all(stopper)
+
+        raw = _read_all(sock).decode(errors="replace")
+        assert raw.startswith("HTTP/1.1 200"), f"in-flight request was cut short: {raw!r}"
+        assert raw.rstrip().endswith("drained"), f"response body truncated: {raw!r}"
+        _wait_for_exit(proc, timeout=15)
+        assert proc.returncode == 0, (
+            f"stop() must run the graceful shutdown and exit 0; got "
+            f"{proc.returncode}\n{read_child_log(proc)}"
+        )
+        assert "Server stopped." in read_child_log(proc)
+    finally:
+        _reap(proc)
+
+
+@_NEEDS_POSIX_SIGINT
 def test_sigint_lets_the_in_flight_request_finish(tmp_path):
     """SIGINT lets the in-flight request finish"""
     proc = None
@@ -441,6 +489,7 @@ def test_sigint_lets_the_in_flight_request_finish(tmp_path):
         _reap(proc)
 
 
+@_NEEDS_POSIX_SIGINT
 def test_sigint_exits_with_code_0(tmp_path):
     """SIGINT exits with code 0"""
     proc = None
@@ -457,6 +506,7 @@ def test_sigint_exits_with_code_0(tmp_path):
         _reap(proc)
 
 
+@pytest.mark.skipif(IS_WINDOWS, reason="[needs:os=posix] Windows has no SIGHUP")
 def test_sighup_is_not_trapped_and_terminates_the_process(tmp_path):
     """SIGHUP is not trapped and terminates the process"""
     proc = None
@@ -482,7 +532,7 @@ def test_a_registered_background_task_does_not_block_shutdown(tmp_path):
         proc, port = _boot(tmp_path, background_task=True)
         # Let the task tick at least twice so it is genuinely running.
         time.sleep(0.6)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         elapsed = _wait_for_exit(proc, timeout=15)
 
         assert proc.returncode == 0, (
@@ -504,7 +554,7 @@ def test_tina4_shutdown_timeout_bounds_the_drain(tmp_path):
         proc, port = _boot(tmp_path, extra_env={"TINA4_SHUTDOWN_TIMEOUT": "1"})
         sock = _begin_request(port, "/very-slow")
         time.sleep(SIGNAL_AFTER_SECONDS)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
 
         elapsed = _wait_for_exit(proc, timeout=VERY_SLOW_SECONDS + 10.0)
         _read_all(sock)  # the in-flight request IS cut short — that is the point
@@ -549,7 +599,7 @@ def test_live_websockets_get_close_code_1001(tmp_path):
         handshake = sock.recv(4096)
         assert b"101 Switching Protocols" in handshake, handshake
 
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         frame = _read_all(sock)
 
         assert len(frame) >= 4, f"no close frame arrived, got {frame!r}"
@@ -571,7 +621,7 @@ def test_shutdown_closes_bound_databases_on_a_real_server(tmp_path):
     try:
         db_path = tmp_path / "app.db"
         proc, port = _boot(tmp_path, database=f"sqlite:///{db_path}")
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=15)
 
         log = read_child_log(proc)
@@ -676,8 +726,10 @@ def test_a_teardown_throw_during_shutdown_still_exits_zero(tmp_path):
     teardown tail in server.py and this raise escapes _serve(), asyncio.run()
     re-raises it, and the child exits non-zero instead of 0.
     """
-    if os.name != "posix":
-        pytest.skip("POSIX signals only; built-in-server teardown is verified on Linux CI")
+    if IS_WINDOWS:
+        # The sabotage swaps the live error.log for a directory while the child
+        # holds it open; Windows refuses to delete an open file.
+        pytest.skip("[needs:os=posix] Windows cannot delete the log file the child holds open")
 
     # A DIFFERENT directory from the child's stdout capture (tmp_path/logs) so
     # sabotaging error.log cannot disturb the test's own view of the child.
@@ -713,7 +765,7 @@ def test_a_teardown_throw_during_shutdown_still_exits_zero(tmp_path):
         error_log.mkdir()
         assert error_log.is_dir(), "error.log must be a directory to fail the write"
 
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=15)
 
         # A handled signal drains to exit 0 — never a negative (killed BY the
@@ -742,13 +794,20 @@ def test_a_teardown_throw_during_shutdown_still_exits_zero(tmp_path):
 #
 # Every case below boots a REAL child under uvicorn and sends it a REAL signal.
 
+# uvicorn re-raises the signal it captured once it has shut down. On POSIX the
+# process then dies BY SIGTERM (Popen reports -15). On Windows the signal
+# send_graceful_shutdown() delivers is SIGBREAK, and the C runtime's default
+# action for a re-raised SIGBREAK is exit(3).
+UVICORN_REREAISED_EXIT = 3 if IS_WINDOWS else -signal.SIGTERM
+
+
 def test_production_path_is_actually_uvicorn(tmp_path):
     """With TINA4_DEBUG off and uvicorn installed, uvicorn owns the socket."""
     _require_uvicorn()
     proc = None
     try:
         proc, port = _boot_production(tmp_path)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=20)
 
         log = read_child_log(proc)
@@ -766,8 +825,8 @@ def test_production_path_is_actually_uvicorn(tmp_path):
         assert "Application shutdown complete" in log, (
             f"uvicorn did not complete its own graceful shutdown:\n{log}"
         )
-        assert proc.returncode == -signal.SIGTERM, (
-            f"expected uvicorn's re-raised SIGTERM ({-signal.SIGTERM}); "
+        assert proc.returncode == UVICORN_REREAISED_EXIT, (
+            f"expected uvicorn's re-raised signal exit ({UVICORN_REREAISED_EXIT}); "
             f"got {proc.returncode}\n{log}"
         )
     finally:
@@ -781,7 +840,7 @@ def test_production_path_closes_bound_databases(tmp_path):
     try:
         db_path = tmp_path / "prod.db"
         proc, port = _boot_production(tmp_path, database=f"sqlite:///{db_path}")
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=20)
 
         log = read_child_log(proc)
@@ -790,7 +849,7 @@ def test_production_path_closes_bound_databases(tmp_path):
             f"the production path leaked its ORM-bound connections — uvicorn "
             f"drains sockets but has no idea they exist; log was:\n{log}"
         )
-        assert proc.returncode == -signal.SIGTERM  # uvicorn re-raises; see above
+        assert proc.returncode == UVICORN_REREAISED_EXIT  # uvicorn re-raises; see above
     finally:
         _reap(proc)
 
@@ -804,7 +863,7 @@ def test_production_path_honours_tina4_shutdown_timeout(tmp_path):
         proc, port = _boot_production(tmp_path, extra_env={"TINA4_SHUTDOWN_TIMEOUT": "1"})
         sock = _begin_request(port, "/very-slow")
         time.sleep(SIGNAL_AFTER_SECONDS)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
 
         elapsed = _wait_for_exit(proc, timeout=VERY_SLOW_SECONDS + 15.0)
         _read_all(sock)  # cut short on purpose — that is what a bound means
@@ -816,7 +875,7 @@ def test_production_path_honours_tina4_shutdown_timeout(tmp_path):
             f"path too, but shutdown took {elapsed:.2f}s against a "
             f"{VERY_SLOW_SECONDS}s handler — the var is a lie here\n{log}"
         )
-        assert proc.returncode == -signal.SIGTERM  # uvicorn re-raises; see above
+        assert proc.returncode == UVICORN_REREAISED_EXIT  # uvicorn re-raises; see above
     finally:
         _reap(proc)
 
@@ -850,7 +909,7 @@ def test_tina4_default_webserver_pins_the_builtin_server(tmp_path):
     try:
         proc, port = _boot_production(
             tmp_path, extra_env={"TINA4_DEFAULT_WEBSERVER": "TRUE"})
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=20)
 
         log = read_child_log(proc)
@@ -870,7 +929,7 @@ def test_tina4_default_webserver_unset_is_unchanged(tmp_path):
     proc = None
     try:
         proc, port = _boot_production(tmp_path)
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=20)
 
         log = read_child_log(proc)
@@ -886,7 +945,7 @@ def test_tina4_default_webserver_false_is_unchanged(tmp_path):
     try:
         proc, port = _boot_production(
             tmp_path, extra_env={"TINA4_DEFAULT_WEBSERVER": "FALSE"})
-        os.kill(proc.pid, signal.SIGTERM)
+        send_graceful_shutdown(proc)
         _wait_for_exit(proc, timeout=20)
 
         log = read_child_log(proc)
