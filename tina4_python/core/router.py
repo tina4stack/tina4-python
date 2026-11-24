@@ -55,6 +55,8 @@ class RouteRef:
     def no_auth(self):
         """Mark this route as public — no authentication required."""
         self._route["auth_required"] = False
+        # An ANY route opened explicitly is open for writes too.
+        self._route["auth_write_methods"] = False
         return self
 
     def role(self, *names):
@@ -390,6 +392,15 @@ class Router:
         # @noauth() to open a write route - that is the explicit spelling and it
         # already exists. ADR-0019.
         m = method.upper()
+        # An ANY route serves reads AND writes from one entry, so a single
+        # boolean cannot say "public GET, secured POST". With no explicit
+        # choice it is marked write-secured: the auth gate requires a token
+        # when the request method is a write, exactly as if each method had
+        # its own route (ADR-0019, write-secure by default - which is what
+        # tina4-php and tina4-nodejs do by registering one route per method).
+        # .secure()/.role()/.can() lock every method; .no_auth()/@noauth()
+        # open every method.
+        auth_write_methods = False
         if "auth_required" in options:
             auth_required = options["auth_required"]
         elif hasattr(handler, "_noauth"):
@@ -408,6 +419,7 @@ class Router:
             # §9.2.1) — requiring auth on them breaks cache validators
             # and CORS preflight probes.
             auth_required = m not in ("GET", "HEAD", "OPTIONS", "ANY")
+            auth_write_methods = m == "ANY"
 
         route = {
             "method": m,
@@ -423,6 +435,7 @@ class Router:
             "module": getattr(handler, "__module__", ""),
             "middleware": effective_middleware,
             "auth_required": auth_required,
+            "auth_write_methods": auth_write_methods,
             # RBAC guards (Feature 138): lists of OR-groups; AND across groups.
             # Populated here for the innermost-order case, and appended to by the
             # RouteRef.role()/.can() modifiers for the documented guard-above order.
@@ -863,8 +876,9 @@ def noauth():
         # critical-security finding after reading the misleading line).
         if hasattr(fn, "_route_ref"):
             route = fn._route_ref._route
-            was_required = route.get("auth_required", False)
+            was_required = route.get("auth_required", False) or route.get("auth_write_methods", False)
             route["auth_required"] = False
+            route["auth_write_methods"] = False
             if was_required:
                 Log.debug(
                     f"Route auth updated: {route['method']} {route['path']} "

@@ -1851,7 +1851,11 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     skipped and the search moves on to the next slot (ADR-0079 s1).
     """
     if not route.get("auth_required"):
-        return False
+        # A bare ANY route is public for reads and secured for writes
+        # (ADR-0019); every other public route skips the gate here.
+        if not (route.get("auth_write_methods")
+                and str(request.method).upper() not in ("GET", "HEAD", "OPTIONS")):
+            return False
     from tina4_python.auth import Auth, is_identity_payload
     _auth_header = request.headers.get("authorization", "")
     _auth_ok = False
