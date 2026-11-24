@@ -1842,6 +1842,18 @@ def _handle_swagger(request: Request, response: Response) -> Response | None:
     return None
 
 
+def _route_needs_auth(route: dict, request: Request) -> bool:
+    """Whether this request must carry a token on this route.
+
+    A bare ANY route is public for reads and secured for writes (ADR-0019);
+    every other route says so with auth_required.
+    """
+    if route.get("auth_required"):
+        return True
+    return bool(route.get("auth_write_methods")) and \
+        str(request.method).upper() not in ("GET", "HEAD", "OPTIONS")
+
+
 def _check_auth(request: Request, response: Response, route: dict) -> bool:
     """Validate auth on a route. Returns True if handler should be skipped.
 
@@ -1850,7 +1862,7 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     ("type": "form") proves where a write came from, not who sent it, so it is
     skipped and the search moves on to the next slot (ADR-0079 s1).
     """
-    if not route.get("auth_required"):
+    if not _route_needs_auth(route, request):
         return False
     from tina4_python.auth import Auth, is_identity_payload
     _auth_header = request.headers.get("authorization", "")
