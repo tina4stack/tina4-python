@@ -72,6 +72,25 @@ def _install_real_client_on_path(tmp_path, exit_code=0) -> str:
     """
     bindir = tmp_path / "clientbin"
     bindir.mkdir(exist_ok=True)
+    if sys.platform == "win32":
+        # Windows cannot run a #!/bin/sh script, and PATH lookup there resolves
+        # `tina4` through PATHEXT (tina4.exe, tina4.cmd, ...). The real client is
+        # the same program shape: a batch file that runs a recorder doing exactly
+        # what the shell script does on POSIX.
+        recorder = bindir / "record_client.py"
+        recorder.write_text(
+            "import os, sys\n"
+            f"with open({str(tmp_path / 'argv.txt')!r}, 'a') as fh:\n"
+            "    fh.writelines(arg + '\\n' for arg in sys.argv[1:])\n"
+            f"with open({str(tmp_path / 'guard.txt')!r}, 'w') as fh:\n"
+            f"    fh.write(os.environ.get({DELEGATION_GUARD_ENV!r}, '') + '\\n')\n"
+            "print('REAL-CLIENT-RAN ' + ' '.join(sys.argv[1:]), flush=True)\n"
+            f"sys.exit({exit_code})\n"
+        )
+        (bindir / f"{CLIENT_BINARY}.cmd").write_text(
+            f'@"{sys.executable}" "{recorder}" %*\r\n@exit /b %ERRORLEVEL%\r\n'
+        )
+        return str(bindir)
     client = bindir / CLIENT_BINARY
     client.write_text(
         "#!/bin/sh\n"
@@ -138,6 +157,23 @@ class TestDelegationReachesTheClient:
         result = _run_cli(["doctor"], path=path, cwd=tmp_path)
 
         assert result.returncode == 3, f"expected the client's 3, got {result.returncode}"
+
+    def test_hostile_arguments_reach_the_client_verbatim_and_run_nothing(self, tmp_path):
+        """Every cmd.exe metacharacter reaches the client unchanged, and nothing
+        it spells runs. On Windows a `tina4.cmd` client is re-parsed by cmd.exe:
+        before the fix `%PATH%` was expanded, `^` vanished and `x|y` ran `y`.
+        Mutation: spawn with subprocess.run([client, ...]) again and this goes
+        red on Windows (and the marker file is written)."""
+        marker = tmp_path / "injected.txt"
+        path = _install_real_client_on_path(tmp_path, exit_code=0)
+        args = ["a&b", "100%PATH%", 'say "hi"', "a^b", "x|y", "<in", "(p)", "!bang!",
+                "", "tail\\", f'x&echo pwned>"{marker}"', f'x|echo pwned>"{marker}"']
+
+        result = _run_cli(["deploy", *args], path=path, cwd=tmp_path)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _recorded_argv(tmp_path) == ["deploy", *args]
+        assert not marker.exists(), "an argument ran a second command"
 
     def test_loop_guard_is_set_on_the_child(self, tmp_path):
         """The child is marked so a client that resolves back here is caught."""

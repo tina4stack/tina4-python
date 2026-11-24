@@ -43,7 +43,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import _skip_is_excused, _truthy
+from conftest import _skip_is_excused, _truthy, anchor_pytest_project
 from test_realtime_files import MINIO_UNREACHABLE_REASON
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -245,6 +245,7 @@ def _run(tmp_path: Path, gate_on: bool, firebird_url: str = "") -> dict[str, str
     project = tmp_path / "project"
     project.mkdir()
     shutil.copyfile(CONFTEST, project / "conftest.py")
+    anchor_pytest_project(project)
     (project / "test_sample.py").write_text(SAMPLE_TESTS)
     (project / "test_module_untagged.py").write_text(MODULE_LEVEL_UNTAGGED)
     (project / "test_module_platform.py").write_text(MODULE_LEVEL_PLATFORM)

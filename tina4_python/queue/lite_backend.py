@@ -120,7 +120,7 @@ class LiteBackend:
         }
         prefix = self._next_prefix()
         filepath = os.path.join(self._queue_dir(), f"{prefix}_{job_id}.queue-data")
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(job, f, indent=2, default=str)
         return job_id
 
@@ -145,7 +145,7 @@ class LiteBackend:
                 continue
             filepath = os.path.join(queue_dir, filename)
             try:
-                with open(filepath) as f:
+                with open(filepath, encoding="utf-8") as f:
                     job_data = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError):
                 continue
@@ -187,7 +187,7 @@ class LiteBackend:
             "created_at": job_data.get("created_at", now),
         }
         os.makedirs(self._reserved_dir(), exist_ok=True)
-        with open(self._reserved_path(record["id"]), "w") as f:
+        with open(self._reserved_path(record["id"]), "w", encoding="utf-8") as f:
             json.dump(record, f, indent=2, default=str)
 
     def _reclaim_expired(self, now: str):
@@ -210,7 +210,7 @@ class LiteBackend:
                 continue
             filepath = os.path.join(reserved_dir, filename)
             try:
-                with open(filepath) as f:
+                with open(filepath, encoding="utf-8") as f:
                     job_data = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError):
                 continue
@@ -303,7 +303,7 @@ class LiteBackend:
                     continue
                 filepath = os.path.join(scan_dir, filename)
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding="utf-8") as f:
                         job_data = json.load(f)
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue
@@ -326,7 +326,7 @@ class LiteBackend:
                     continue
                 filepath = os.path.join(scan_dir, filename)
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding="utf-8") as f:
                         job_data = json.load(f)
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue
@@ -351,7 +351,7 @@ class LiteBackend:
                     continue
                 filepath = os.path.join(failed_dir, filename)
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding="utf-8") as f:
                         job_data = json.load(f)
                     if job_data.get("attempts", 0) < limit:
                         job_data["status"] = "pending"
@@ -359,7 +359,7 @@ class LiteBackend:
                         job_data["created_at"] = _now()
                         prefix = self._next_prefix()
                         new_path = os.path.join(queue_dir, f"{prefix}_{job_data['id']}.queue-data")
-                        with open(new_path, "w") as f:
+                        with open(new_path, "w", encoding="utf-8") as f:
                             json.dump(job_data, f, indent=2, default=str)
                         os.unlink(filepath)
                         count += 1
@@ -385,7 +385,7 @@ class LiteBackend:
                     continue
                 filepath = os.path.join(queue_dir, filename)
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding="utf-8") as f:
                         job_data = json.load(f)
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue
@@ -406,7 +406,7 @@ class LiteBackend:
                     continue
                 filepath = os.path.join(failed_dir, filename)
                 try:
-                    with open(filepath) as f:
+                    with open(filepath, encoding="utf-8") as f:
                         job_data = json.load(f)
                     if job_data.get("attempts", 0) >= limit:
                         results.append(job_data)
@@ -427,7 +427,7 @@ class LiteBackend:
         queue_dir = self._queue_dir()
         filepath = os.path.join(failed_dir, f"{job_id}.queue-data")
         try:
-            with open(filepath) as f:
+            with open(filepath, encoding="utf-8") as f:
                 job_data = json.load(f)
             job_data["status"] = "pending"
             job_data["error"] = None
@@ -439,7 +439,7 @@ class LiteBackend:
                 job_data["available_at"] = _now()
             prefix = self._next_prefix()
             new_path = os.path.join(queue_dir, f"{prefix}_{job_id}.queue-data")
-            with open(new_path, "w") as f:
+            with open(new_path, "w", encoding="utf-8") as f:
                 json.dump(job_data, f, indent=2, default=str)
             os.unlink(filepath)
             return True
@@ -504,7 +504,7 @@ class LiteBackend:
         }
         prefix = self._next_prefix()
         filepath = os.path.join(self._queue_dir(), f"{prefix}_{job.id}.queue-data")
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(job_data, f, indent=2, default=str)
 
     def _dead_letter(self, job: Job, error: str = ""):
@@ -523,7 +523,7 @@ class LiteBackend:
         failed_dir = self._failed_dir()
         os.makedirs(failed_dir, exist_ok=True)
         filepath = os.path.join(failed_dir, f"{job.id}.queue-data")
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(job_data, f, indent=2, default=str)
 
     def fail(self, job: Job, error: str = ""):

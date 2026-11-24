@@ -6,9 +6,12 @@
 import os
 import threading
 import pytest
+
+from conftest import needs_symlinks
 from tina4_python.dev_admin import _dev_read_bytes
 
 
+@needs_symlinks
 def test_dev_file_descriptor_rejects_nonregular_and_oversized_files(tmp_path):
     good = tmp_path / 'good'; good.write_bytes(b'public')
     assert _dev_read_bytes(str(good), 6) == b'public'

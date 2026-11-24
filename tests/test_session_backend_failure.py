@@ -493,7 +493,10 @@ def test_write_fails_after_a_successful_start_with_a_real_eacces(log_sink, monke
         # errno, not wording: strerror is localised, [Errno 13] is not.
         eacces = [e for e in errors if "errno 13" in e.lower()]
         assert eacces, f"the logged cause must be the real EACCES. Got: {errors}"
-        assert all(str(session_file) in e for e in eacces), (
+        # OSError renders the filename as its repr, which doubles every
+        # backslash in a Windows path; on POSIX the two forms are identical.
+        file_forms = (str(session_file), repr(str(session_file))[1:-1])
+        assert all(any(form in e for form in file_forms) for e in eacces), (
             "the EACCES must name the SESSION FILE. Any other path means the "
             f"kernel refused a directory traversal, not the file's own bits. "
             f"Got: {eacces}"

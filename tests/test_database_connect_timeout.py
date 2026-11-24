@@ -370,7 +370,12 @@ def test_connection_refused_is_not_reported_as_a_timeout():
         closed_port = probe.getsockname()[1]
     # `probe` is closed here: nothing is listening on closed_port.
 
-    with connect_timeout_env(TEST_BOUND_SECONDS):
+    # Windows answers a connect to a closed loopback port only after ~2 s of SYN
+    # retries (POSIX refuses at once), which is TEST_BOUND_SECONDS itself, so
+    # this case gets a bound comfortably above that. A refusal still arrives
+    # well inside it; a timeout would take all of it.
+    refusal_bound = max(TEST_BOUND_SECONDS, 5)
+    with connect_timeout_env(refusal_bound):
         started = time.monotonic()
         with pytest.raises(Exception) as excinfo:
             PostgreSQLAdapter().connect(f"postgresql://u:p@127.0.0.1:{closed_port}/d")
@@ -379,7 +384,7 @@ def test_connection_refused_is_not_reported_as_a_timeout():
     assert not isinstance(excinfo.value, DatabaseConnectTimeout), (
         f"a refused connection was mis-reported as a timeout: {excinfo.value}"
     )
-    assert elapsed < TEST_BOUND_SECONDS, (
+    assert elapsed < refusal_bound, (
         f"a closed port took {elapsed:.2f}s — it should refuse instantly"
     )
 

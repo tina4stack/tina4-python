@@ -17,13 +17,11 @@ Each test names, in its docstring, the mutation that must turn it red — the pr
 it is a gate and not a ghost.
 """
 import asyncio
-import os
-import signal
 import time
 
 import pytest
 
-from conftest import free_port, boot_child_server, port_open
+from conftest import free_port, boot_child_server, port_open, send_graceful_shutdown
 from tina4_python import tcp as tcp_module
 from tina4_python.tcp import TcpService, tcp_service, tcp
 
@@ -630,9 +628,9 @@ async def test_sigterm_drains_live_tcp_connection_and_exits_zero(tmp_path):
         greeting = await asyncio.wait_for(reader.readexactly(6), timeout=3.0)
         assert greeting == b"HELLO\n"
 
-        # Signal the whole child process group (new_session=True) so the pytest
-        # runner is not signalled.
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        # Signal the child's own process group (new_session=True) so the pytest
+        # runner is not signalled: SIGTERM on POSIX, CTRL_BREAK_EVENT on Windows.
+        send_graceful_shutdown(proc)
 
         # The live TCP connection must be closed cleanly (EOF) within the drain.
         tail = await asyncio.wait_for(reader.read(1), timeout=10.0)

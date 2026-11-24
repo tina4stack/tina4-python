@@ -526,7 +526,7 @@ class _FileBackend(_CacheBackend):
                 self._misses += 1
                 return None
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 expires_at = data.get("expires_at")
                 if expires_at and time.time() > expires_at:
                     path.unlink(missing_ok=True)
@@ -552,7 +552,7 @@ class _FileBackend(_CacheBackend):
             except OSError:
                 pass
             try:
-                path.write_text(json.dumps(entry, default=str))
+                path.write_text(json.dumps(entry, default=str), encoding="utf-8")
             except OSError:
                 pass
 
@@ -581,7 +581,7 @@ class _FileBackend(_CacheBackend):
             count = 0
             for f in self._dir.glob("*.json"):
                 try:
-                    data = json.loads(f.read_text())
+                    data = json.loads(f.read_text(encoding="utf-8"))
                     exp = data.get("expires_at")
                     if exp and now > exp:
                         f.unlink(missing_ok=True)
@@ -602,7 +602,7 @@ class _FileBackend(_CacheBackend):
             removed = 0
             for f in self._dir.glob("*.json"):
                 try:
-                    exp = json.loads(f.read_text()).get("expires_at")
+                    exp = json.loads(f.read_text(encoding="utf-8")).get("expires_at")
                     if exp and now > exp:
                         f.unlink(missing_ok=True)
                         removed += 1

@@ -36,8 +36,10 @@ from tina4_python.core.response import Response
 def confined(tmp_path, monkeypatch):
     """A project root with a public download dir and a secret beside it."""
     (tmp_path / "downloads").mkdir()
-    (tmp_path / "downloads" / "report.txt").write_text("PUBLIC REPORT\n")
-    (tmp_path / "secret.env").write_text("TINA4_SECRET=super-secret-value\n")
+    # Bytes, not text: write_text turns "\n" into "\r\n" on Windows, and the
+    # served body is compared byte for byte.
+    (tmp_path / "downloads" / "report.txt").write_bytes(b"PUBLIC REPORT\n")
+    (tmp_path / "secret.env").write_bytes(b"TINA4_SECRET=super-secret-value\n")
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -83,7 +85,7 @@ def test_file_serves_an_absolute_path_when_no_root_is_declared(confined):
     PhysicalFile all serve one), so this must NOT be 403.
     """
     outside = confined.parent / "outside.txt"
-    outside.write_text("OUTSIDE\n")
+    outside.write_bytes(b"OUTSIDE\n")
     response = Response()
     response.file(str(outside))
     assert response.status_code == 200

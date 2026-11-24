@@ -603,7 +603,7 @@ def _record_broken_import(py_file: Path, error: Exception) -> None:
             "type": "auto_discover_failure",
             "file": str(py_file),
             "error": f"{type(error).__name__}: {error}",
-        }))
+        }), encoding="utf-8")
     except Exception:
         # If even the .broken write fails we already logged the original error.
         pass
@@ -1842,6 +1842,18 @@ def _handle_swagger(request: Request, response: Response) -> Response | None:
     return None
 
 
+def _route_needs_auth(route: dict, request: Request) -> bool:
+    """Whether this request must carry a token on this route.
+
+    A bare ANY route is public for reads and secured for writes (ADR-0019);
+    every other route says so with auth_required.
+    """
+    if route.get("auth_required"):
+        return True
+    return bool(route.get("auth_write_methods")) and \
+        str(request.method).upper() not in ("GET", "HEAD", "OPTIONS")
+
+
 def _check_auth(request: Request, response: Response, route: dict) -> bool:
     """Validate auth on a route. Returns True if handler should be skipped.
 
@@ -1850,7 +1862,7 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     ("type": "form") proves where a write came from, not who sent it, so it is
     skipped and the search moves on to the next slot (ADR-0079 s1).
     """
-    if not route.get("auth_required"):
+    if not _route_needs_auth(route, request):
         return False
     from tina4_python.auth import Auth, is_identity_payload
     _auth_header = request.headers.get("authorization", "")
@@ -3838,10 +3850,10 @@ def _write_broken(request: Request, error: Exception):
     for existing in broken_dir.glob("*.broken"):
         if error_type in existing.name:
             try:
-                data = json.loads(existing.read_text())
+                data = json.loads(existing.read_text(encoding="utf-8"))
                 data["last_seen"] = ts.isoformat()
                 data["occurrence_count"] = data.get("occurrence_count", 1) + 1
-                existing.write_text(json.dumps(data, indent=2))
+                existing.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 return
             except Exception:
                 pass
@@ -3867,7 +3879,7 @@ def _write_broken(request: Request, error: Exception):
         "resolved": False,
     }
 
-    (broken_dir / filename).write_text(json.dumps(data, indent=2))
+    (broken_dir / filename).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _find_production_server():
@@ -4794,12 +4806,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         # ungracefully instead of draining — a device that connects the instant
         # the port opens lands squarely in it (feature 142's SIGTERM-drain
         # contract). Mirrors Node/PHP/Ruby arming handlers before accept.
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, _signal_handler)
-            except NotImplementedError:
-                pass  # Windows
+        _arm_shutdown_signals(asyncio.get_running_loop(), _signal_handler)
 
         # Raw TCP services (feature 142, ADR-0102 D1) fold into THIS accept loop
         # — same process as HTTP, so a device gateway and its dashboard share
@@ -4911,6 +4918,37 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         pass
 
 
+def _arm_shutdown_signals(loop, handler) -> None:
+    """Route every shutdown signal this OS can deliver to ``handler`` on ``loop``.
+
+    POSIX: SIGINT and SIGTERM through the loop's own signal handling.
+
+    Windows: the event loop has no add_signal_handler (it raises
+    NotImplementedError), and swallowing that left the built-in server with NO
+    graceful shutdown at all - Ctrl+C, Ctrl+Break and a service manager's stop
+    all killed it mid-request. The C runtime still delivers SIGINT (Ctrl+C),
+    SIGBREAK (Ctrl+Break / CTRL_BREAK_EVENT, what a console or service manager
+    sends a process group) and SIGTERM (raised in-process by stop()), and the
+    proactor loop's wakeup fd wakes it for each, so a plain signal handler that
+    hands off to the loop runs the same drain as POSIX.
+    """
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, handler)
+        return
+
+    def _on_signal(_signum, _frame):
+        loop.call_soon_threadsafe(handler)
+
+    for name in ("SIGINT", "SIGBREAK", "SIGTERM"):
+        try:
+            signal.signal(getattr(signal, name), _on_signal)
+        except ValueError:
+            # Not the main thread: signals cannot be trapped here at all, the
+            # same limit add_signal_handler has on POSIX.
+            pass
+
+
 # ── Module-level server reference for start()/stop() ────────────────────
 _server_handle: dict | None = None
 
@@ -4930,4 +4968,10 @@ def stop():
     shutdown event inside run(). Safe to call from signal handlers or
     separate threads.
     """
-    os.kill(os.getpid(), signal.SIGTERM)
+    if sys.platform == "win32":
+        # os.kill(pid, SIGTERM) is TerminateProcess on Windows: an instant kill
+        # that no handler sees. Raising it in-process reaches the handler armed
+        # by _arm_shutdown_signals instead, so stop() drains there too.
+        signal.raise_signal(signal.SIGTERM)
+    else:
+        os.kill(os.getpid(), signal.SIGTERM)

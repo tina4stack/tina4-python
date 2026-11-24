@@ -56,7 +56,7 @@ def _run(tmp_path, argv, extra_env=None):
 
 def _project_files(tmp_path):
     """All files anywhere under tmp_path — used to prove --dry-run wrote none."""
-    return sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")
+    return sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")
                   if p.is_file())
 
 

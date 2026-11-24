@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-from conftest import child_pythonpath
+from conftest import anchor_pytest_project, child_pythonpath
 from tina4_python.cli import COMMANDS, GENERATORS
 
 _ENTRYPOINT = "import sys; from tina4_python.cli import main; main()"
@@ -173,6 +173,7 @@ def test_test_passes_its_arguments_to_pytest_unchecked(tmp_path):
     project = _project(tmp_path)
     (project / "tests").mkdir()
     (project / "tests" / "test_x.py").write_text("def test_one():\n    assert True\n")
+    anchor_pytest_project(project)
     result = _run_cli(["test", "-q", "-k", "one"], project)
     assert "Unknown option" not in result.stdout
     assert "1 passed" in result.stdout + result.stderr

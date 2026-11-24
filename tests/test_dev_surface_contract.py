@@ -17,6 +17,7 @@ import os
 
 import pytest
 
+from conftest import needs_symlinks
 from test_dev_admin_conformance import _dispatch
 
 SECRET = "dev-surface-secret-0078"
@@ -54,6 +55,7 @@ def test_a_dotenv_path_with_a_trailing_dot_segment_is_refused(project_dir):
             assert SECRET.encode() not in body, f"{endpoint}?path={trick} served .env"
 
 
+@needs_symlinks
 def test_a_symlink_to_dotenv_is_refused(project_dir):
     os.symlink(project_dir / ".env", project_dir / "innocent.txt")
     status, body, _ = _dispatch("GET", "/__dev/api/file?path=innocent.txt")
@@ -312,6 +314,7 @@ def test_every_dev_method_requires_raw_peer_trust(project_dir, method):
     assert b"public-readme" not in body
 
 
+@needs_symlinks
 def test_public_in_project_symlink_remains_readable(project_dir):
     (project_dir / "public-alias.txt").symlink_to(project_dir / "readme.txt")
     for endpoint in ("/__dev/api/file", "/__dev/api/file/raw"):

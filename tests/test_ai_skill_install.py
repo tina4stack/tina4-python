@@ -27,7 +27,7 @@ def test_install_skills_lands_in_project_and_global(tmp_path):
         # a reference file came down too
         assert (dest / _DEV_SKILL / "references" / "data-and-orm.md").exists()
 
-    body = (proj_skills / _DEV_SKILL / "SKILL.md").read_text()
+    body = (proj_skills / _DEV_SKILL / "SKILL.md").read_text(encoding="utf-8")
     assert "The Tina4 Working Method" in body  # the real 3.13.59 content
 
 

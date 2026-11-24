@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import child_pythonpath, free_port
+from conftest import child_pythonpath, free_port, process_rss_mb
 
 
 LIMIT = 1_048_576          # 1MB, so the test does not need a 40MB payload
@@ -100,21 +100,7 @@ def _boot(root: Path, port: int) -> subprocess.Popen:
 
 def _rss_mb(pid: int) -> float:
     """Resident memory of the server process tree, in MB, from the OS."""
-    out = subprocess.run(
-        ["ps", "-Ao", "rss,pid,ppid"], capture_output=True, text=True, check=False
-    ).stdout
-    total = 0
-    for line in out.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        rss, this_pid, parent = parts[0], parts[1], parts[2]
-        if this_pid == str(pid) or parent == str(pid):
-            try:
-                total += int(rss)
-            except ValueError:
-                pass
-    return total / 1024
+    return process_rss_mb(pid, include_children=True)
 
 
 def _post(port: int, body: bytes, content_type: str = "application/octet-stream"):

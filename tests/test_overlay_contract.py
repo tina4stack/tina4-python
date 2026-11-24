@@ -175,7 +175,9 @@ def _make_deep_exception(depth: int = 5000) -> BaseException:
             sys.setrecursionlimit(old_limit)
 
     old_size = threading.stack_size()
-    threading.stack_size(256 * 1024 * 1024)
+    # 64MB, ample for 5000 frames. 256MB is refused on Windows, where CPython's
+    # upper bound is exclusive at 0x10000000 ("size not valid").
+    threading.stack_size(64 * 1024 * 1024)
     try:
         t = threading.Thread(target=worker)
         t.start()

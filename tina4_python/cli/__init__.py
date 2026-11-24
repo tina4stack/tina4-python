@@ -385,7 +385,10 @@ def _delegate_to_client(command: str, args: list) -> int:
     # output work exactly as if it had been invoked directly.
     env = dict(os.environ)
     env[DELEGATION_GUARD_ENV] = command
-    return subprocess.run([client, command, *args], env=env).returncode
+    # A `tina4.cmd` / `.bat` client is re-parsed by cmd.exe; run_allowing_batch
+    # escapes every argument for it so `|`, `&`, `%VAR%` and `^` arrive verbatim.
+    from tina4_python.core.batch_spawn import run_allowing_batch
+    return run_allowing_batch([client, command, *args], env=env).returncode
 
 
 # ── Main entry point ─────────────────────────────────────────────────
@@ -395,6 +398,8 @@ HELP_FLAGS = ("--help", "-h")
 
 def main():
     """CLI entry point."""
+    from tina4_python.debug import ensure_utf8_stdio
+    ensure_utf8_stdio()
     args = sys.argv[1:]
     if not args or args[0].lower() in HELP_FLAGS:
         _help()
@@ -1223,9 +1228,12 @@ def _build(args):
         # must be lowercase). Fall back to a sane name for an unnamed cwd.
         tag = f"{(Path.cwd().name.lower() or 'tina4app')}:latest"
 
-    dockerfile = Path(flags.get("file") or "Dockerfile")
+    requested = flags.get("file") or "Dockerfile"
+    dockerfile = Path(requested)
     if not dockerfile.is_file():
-        print(f"  ✗ No {dockerfile} found.")
+        # Echo the path as the user typed it: str(Path) rewrites
+        # docker/prod/Dockerfile to docker\prod\Dockerfile on Windows.
+        print(f"  ✗ No {requested} found.")
         print("  A Tina4 app deploys as a container. Scaffold a Dockerfile first:")
         print("      tina4 deploy docker        (or: tina4python init)")
         sys.exit(1)
