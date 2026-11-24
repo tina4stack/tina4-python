@@ -9,6 +9,27 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.166 - 2026-11-24
+
+### Security
+
+- Database URL redaction never prints the password (GHSA-h2mr-m3v3-cq8c, reported by Michael Smit). A password containing `/ ? # @ %` or a space, a URL with one slash or no colon after the scheme, a URL with no host, or a non-numeric port printed the password, or part of it, in startup logs, connection errors and exception messages; a parse error also re-raised the stdlib message that quotes it. One rule now finds the password (userinfo ends at the last `@`), one parser refuses a malformed URL without echoing it and never chains the stdlib error, and every adapter, cache, queue, session, graph and backplane URL goes through them. An unencoded `@` in a path or query is refused (encode it as `%40`); `scheme:/` and `scheme//` are refused; AMQP credentials are percent-decoded, and a RabbitMQ `TINA4_QUEUE_URL` needs its `amqp://` scheme (a bare `host:port` used to be accepted); userinfo in a Kafka URL is dropped (credentials come from the SASL settings) (#334).
+- A bare `any()` route keeps writes secure by default (ADR-0019). `Router.any`, `@any_method` and group `any()` registered one ANY route that was public for every method, so anonymous POST, PUT, PATCH and DELETE reached it where `Router.post` on the same path answers 401. Reads stay public; writes need a token unless the route says `.no_auth()` / `@noauth()`. An app that relied on anonymous writes to a bare `any()` route must add `.no_auth()` (#333; same in tina4-ruby#191).
+
+### Fixed
+
+- A failing seed file fails loud (ADR-0108). `seed_dir` swallowed a failing file and returned a shorter list; it now stops at it, logs it and raises `SeedError` naming the file, the files that ran before it and the cause. It also calls a seed module's `run(db)`, the shape `generate seeder` writes, which it never did. `tina4python seed` runs through `seed_dir` and exits 1 on a failure (#331).
+- Windows: the built-in server shuts down gracefully on Ctrl+C, Ctrl+Break and a service stop (it had no handler and was killed mid-request), and `stop()` drains instead of terminating the process (#332).
+- Windows: CLI and log output is UTF-8 on a pipe or redirect (the locale codepage raised `UnicodeEncodeError` on the CLI's status marks) (#332).
+- Windows: a `tina4.cmd` client receives its arguments intact (cmd.exe expanded `%VAR%`, dropped `^` and ran the part after `|`), and dev-admin finds `npm`, `composer`, `bundle` and `gem` (#332).
+- Windows: startup migrations take a real file lock (`msvcrt`), so concurrent workers no longer each apply every migration (#332).
+- Every JSON and text file the framework reads or writes is UTF-8 on every platform (#332).
+- Dev-admin's peak memory is the server's own. Without psutil it read `ru_maxrss`, which Linux starts at the parent's size at fork, so a server started by a large process reported that process's size as its peak; it now reads `VmHWM` (#334).
+
+### Changed
+
+- The test suite passes on Windows (#332).
+
 ## 3.13.165 - 2026-11-22
 
 ### Fixed
