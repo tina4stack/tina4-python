@@ -24,7 +24,8 @@ byte-identical in all four.
 """
 import os
 import re
-from urllib.parse import urlparse, unquote
+from typing import NamedTuple
+from urllib.parse import quote, urlparse, unquote
 
 # ── Redaction ─────────────────────────────────────────────────
 # THE single redaction primitive. Everything that puts a connection string in
@@ -48,24 +49,128 @@ from urllib.parse import urlparse, unquote
 _ODBC_PASSWORD = re.compile(
     r"(?i)\b(PWD|PASSWORD)\s*=\s*(?:\{(?:[^}]|\}\})*\}|[^;]*)")
 
-# The password inside URL userinfo: `scheme://user:PASSWORD@host`. The password
-# run is greedy up to the LAST `@` before the authority ends, so an un-encoded
-# `@` inside the password (`redis://u:p@ss@host`) cannot leave `ss` behind. It
-# never crosses a `/`, so a port (`host:6379/db`) is never mistaken for one.
+# The password inside URL userinfo. GHSA-h2mr-m3v3-cq8c: the previous
+# single-regex form, `(://[^/@\s:]*:)[^/\r\n]*@`, could not cross a `/`, never
+# matched `scheme:/` or `scheme//`, and never matched a URL with no host, so
+# `postgres://u:Pq1/Rs2@dbhost/appdb`, `postgres:/u:pw@h` and `postgres://u:pw`
+# came back VERBATIM. ONE rule now decides where a password is, and the parser
+# below (`parse_url`) follows the same rule, so what is masked in a log line is
+# exactly what is read as the password on the connect path:
 #
-# It MUST allow a space. Excluding whitespace here was this very fix's first
-# draft and the space-bearing sentinel caught it inside the hour: a password of
-# "s3ntinel-Pa55 word" stopped the run at the space, the `@` was never reached,
-# and the whole URL came back UNREDACTED - the same "stops at the first
-# whitespace" defect as tina4-php's `\bpassword=\S*` (C4). Newlines stay
-# excluded because a connection string never spans lines, and allowing them
-# would let one line's `@` swallow another's.
+#   1. The authority starts after `scheme://`, `scheme:/` or `scheme//`.
+#   2. The password starts at the FIRST `:` after that. A `/ ? #`, an `@` or
+#      whitespace before that `:` means the text is a path, a query, a
+#      `user@host:port` or prose - not a password. (RFC 3986: the user part
+#      cannot hold an unencoded `:`, so the password starts at the first one.
+#      Letting the user run reach the LAST `:` turned `tina4:s3:cret@host` into
+#      `tina4:s3:***@host`, measured 2026-09-24.)
+#   3. Userinfo ends at the LAST `@` on the line, so an unencoded `@ / ? # %`
+#      or space inside the password cannot leave a tail behind. Over-redaction
+#      can mask a host when a second `@` appears later on the same line; it
+#      never shows a password. A line, not the whole value: a connection
+#      string never spans lines, and one line's `@` must not swallow another's.
+#   4. With no `@` after the `:`, the token there is a port or a password. A
+#      number followed by the end, a `/` or a `?key=value` query is a port and
+#      is left alone; anything else (`u:Pq1Rs2`, `u:12?Pq1Rs2`, `u:12#Pq1Rs2`)
+#      is a password and is masked to the end of the line, keeping a trailing
+#      `?key=value` query.
 #
-# The USER run excludes ':' too. RFC 3986 userinfo is `user ":" password`, so
-# the password starts at the FIRST ':'. Letting the user run reach the LAST ':'
-# (measured 2026-09-24) turned `tina4:s3:cret@host` into `tina4:s3:***@host` -
-# half the password left in every log line.
-_URL_PASSWORD = re.compile(r"(://[^/@\s:]*:)[^/\r\n]*@")
+# KNOWN LIMIT, deliberately not solved: a host-less URL whose password is all
+# digits (`postgres://u:123/x`) is indistinguishable from `host:port/path`, so
+# it is left as it is. A real URL has a host, which puts an `@` after the
+# password and takes rule 3 instead. Likewise `postgres://u:Pq1@Rs2` IS a
+# well-formed URL whose password is `Pq1` and whose host is `Rs2`; the host is
+# shown, as every host is.
+_SCHEME_AUTHORITY = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*(?:://|:/|//)")
+_NOT_A_USER = frozenset("/?#@")
+_PORT_END = frozenset("/?#")
+_KEPT_QUERY = re.compile(r"\?[A-Za-z0-9_.\-]+=[^\s?#&@]*(?:&[A-Za-z0-9_.\-]+=[^\s?#&@]*)*")
+_LINE_BREAK = re.compile(r"(\r\n|\r|\n)")
+
+
+def _ends_a_port(line: str, end: int) -> bool:
+    """Whether what follows an all-digit token lets it be a port.
+
+    A port is followed by the end, whitespace, a `/` path, or a `?key=value`
+    query. A digit-led password is not: `driver://u:12?Pq1Rs2` and
+    `driver://u:12#Pq1Rs2` would otherwise read as port 12 and show the rest
+    (found by the cross-framework mutation run - a `?` with no `key=value`,
+    or a `#`, never follows a port in a connection URL).
+    """
+    if end >= len(line) or line[end] == "/" or line[end].isspace():
+        return True
+    if line[end] == "?":
+        kept = _KEPT_QUERY.match(line, end)
+        return kept is not None and (kept.end() == len(line) or line[kept.end()].isspace())
+    return False
+
+
+def _after_bracketed_host(line: str, start: int) -> int:
+    """Skip a bracketed IPv6 host: its colons are not a password's."""
+    if line.startswith("[", start):
+        close = line.find("]", start)
+        if close != -1:
+            return close + 1
+    return start
+
+
+def _could_be_user(text: str) -> bool:
+    """Rule 2: a `/ ? #`, an `@` or whitespace before the `:` is not a user."""
+    return not any(ch in _NOT_A_USER or ch.isspace() for ch in text)
+
+
+def _token_end(line: str, begin: int) -> int:
+    """Where the port-or-password token starting at ``begin`` ends."""
+    end = begin
+    while end < len(line) and line[end] not in _PORT_END and not line[end].isspace():
+        end += 1
+    return end
+
+
+def _hostless_password_end(line: str, begin: int):
+    """Rule 4: with no `@`, where the password starting at ``begin`` ends -
+    the end of the line, or a trailing `?key=value` query - or None when the
+    token there is a port (see KNOWN LIMIT above) or empty."""
+    end = _token_end(line, begin)
+    token = line[begin:end]
+    if token == "" or (token.isdigit() and token.isascii() and _ends_a_port(line, end)):
+        return None
+    query = line.rfind("?", begin)
+    if query != -1 and _KEPT_QUERY.fullmatch(line, query):
+        return query
+    return len(line)
+
+
+def _password_span(line: str, start: int):
+    """(begin, end) of the password in ``line`` whose authority starts at
+    ``start``, or None when there is none. The rule is described above."""
+    user_start = _after_bracketed_host(line, start)
+    colon = line.find(":", user_start)
+    if colon == -1 or not _could_be_user(line[user_start:colon]):
+        return None
+    at = line.rfind("@", colon + 1)
+    if at != -1:
+        return colon + 1, at  # rule 3: userinfo ends at the LAST `@`
+    end = _hostless_password_end(line, colon + 1)
+    return None if end is None else (colon + 1, end)
+
+
+def _redact_line(line: str) -> str:
+    out, kept_from, search_from = [], 0, 0
+    while True:
+        match = _SCHEME_AUTHORITY.search(line, search_from)
+        if match is None:
+            break
+        span = _password_span(line, match.end())
+        if span is None:
+            search_from = match.end()
+            continue
+        begin, end = span
+        out.append(line[kept_from:begin])
+        out.append("***")
+        kept_from = search_from = end
+    out.append(line[kept_from:])
+    return "".join(out)
 
 
 def redact_url(value: str) -> str:
@@ -76,11 +181,160 @@ def redact_url(value: str) -> str:
     this needs no successful parse, so it is also safe on the values that reach
     a log precisely BECAUSE they are malformed, and on the non-SQL connection
     strings the framework carries (``TINA4_CACHE_URL``, a broker URL, an ODBC
-    DSN). A value with no credential in it is returned unchanged.
+    DSN). It works on a URL embedded in a longer message too. The scheme, the
+    user and the host stay visible, so the line is still useful. A value with
+    no credential in it is returned unchanged.
     """
     if not isinstance(value, str) or value == "":
         return value
-    return _URL_PASSWORD.sub(r"\1***@", _ODBC_PASSWORD.sub(r"\1=***", value))
+    value = _ODBC_PASSWORD.sub(r"\1=***", value)
+    parts = _LINE_BREAK.split(value)
+    # Odd indexes are the line breaks themselves (the split keeps them).
+    return "".join(part if index % 2 else _redact_line(part)
+                   for index, part in enumerate(parts))
+
+
+# ── The one URL parser for every connection string ────────────────
+# GHSA-h2mr-m3v3-cq8c, the parsing half. `urlparse` ends the authority at the
+# FIRST `/ ? #`, so for `postgres://u:Pq1/Rs2@dbhost/appdb` it reads host `u`
+# and port `Pq1`, and `.port` raises "Port could not be cast to integer value
+# as 'Pq1'" - a stdlib message that quotes the password, which every connect
+# wrapper then logged. The AMQP, Kafka, memcached and Mongo-session splitters
+# cut at the FIRST `@` and turned `Rs2@dbhost` into a host name. Every
+# connection URL in the framework is now split here, by the redaction rule:
+# userinfo ends at the LAST `@`, the password starts at the first `:` in it.
+
+_SCHEME_PREFIX = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*)://")
+_NOT_SHOWN = "The value is not shown because it may contain a password."
+
+
+class UrlParts(NamedTuple):
+    """A split connection URL. ``username``/``password`` are percent-DECODED,
+    and None when absent (``user:@host`` gives an explicitly empty password)."""
+    scheme: str
+    username: "str | None"
+    password: "str | None"
+    hostname: "str | None"
+    port: "int | None"
+    path: str
+    query: str
+    fragment: str
+
+
+def _split_userinfo(url: str, label: str):
+    """(scheme as written, raw userinfo or None, host part). Raises generically."""
+    match = _SCHEME_PREFIX.match(url) if isinstance(url, str) else None
+    if match is None:
+        # Covers `scheme:/u:pw@h`, `scheme//u:pw@h` and a bare value: none of
+        # them is a URL this framework connects with, and echoing it would
+        # print whatever password it carries.
+        raise ValueError(
+            f"{label}: Invalid URL format - no 'driver://' scheme. "
+            f"Expected driver://user:password@host:port/database. {_NOT_SHOWN}"
+        )
+    rest = url[match.end():]
+    if "@" not in rest:
+        if _password_span(url, match.end()) is not None:
+            # No `@`, yet the redaction rule sees a password (`driver://u:pw`,
+            # `driver://u:12?pw`): urlparse would read host `u` and a port,
+            # path or query that IS the password. Parser and redactor agree.
+            raise ValueError(
+                f"{label}: Invalid URL - a password with no '@host' after it, "
+                f"or a port that is not a number. {_NOT_SHOWN}"
+            )
+        return match.group(1), None, rest
+    userinfo, _, host_part = rest.rpartition("@")
+    user = userinfo.partition(":")[0]
+    if any(ch in "/?#" or ch.isspace() for ch in user):
+        # The `@` the userinfo would end at sits in the path or the query
+        # (`driver://host/db?owner=a@b`): the `@` count does not match what
+        # can be userinfo. Refuse rather than guess a host.
+        raise ValueError(
+            f"{label}: Invalid URL - an '@' outside the user:password part. "
+            f"Percent-encode an '@' in a path or query as %40. {_NOT_SHOWN}"
+        )
+    return match.group(1), userinfo, host_part
+
+
+def _decode_userinfo(userinfo: "str | None"):
+    """(username, password), percent-DECODED; None for an absent part, and ""
+    for an explicitly empty password (`user:@host`)."""
+    if userinfo is None:
+        return None, None
+    user, colon, secret = userinfo.partition(":")
+    return (unquote(user) if user else None), (unquote(secret) if colon else None)
+
+
+def _parse_host_part(scheme: str, host_part: str, label: str, had_userinfo: bool):
+    """(parsed, hostname, port) of the part after the userinfo.
+
+    The error is raised OUTSIDE the except block. `raise ... from None` only
+    SUPPRESSES the context: the stdlib error (which quotes the token) still
+    rides along as `__context__` for a debugger, a traceback renderer or the
+    dev error overlay to print. Measured: it did, for `driver://u:Pq1Rs2`.
+    """
+    reason = None
+    try:
+        parsed = urlparse(f"{scheme}://{host_part}")
+        hostname = parsed.hostname or None
+        port = parsed.port
+    except ValueError as error:
+        reason = str(error)
+    if reason is None:
+        return parsed, hostname, port
+    if had_userinfo:
+        # The host part is everything after the LAST `@`, so the stdlib's
+        # text (e.g. "Port could not be cast to integer value as
+        # 'notaport'") cannot hold the password - it names the bad token.
+        raise ValueError(f"{label}: Invalid URL - {reason}")
+    # No `@`: the "port" may BE the password (`driver://user:password`).
+    raise ValueError(
+        f"{label}: Invalid URL - the host or port is malformed "
+        f"(a port must be a number from 0 to 65535). {_NOT_SHOWN}"
+    )
+
+
+def parse_url(url: str, label: str = "Connection URL") -> UrlParts:
+    """Split a ``scheme://user:password@host:port/path?query`` URL.
+
+    Never puts the value, or any part of the userinfo, in an error, and never
+    chains a stdlib error that quotes it (no ``__cause__``, no ``__context__``).
+    """
+    scheme, userinfo, host_part = _split_userinfo(url, label)
+    username, password = _decode_userinfo(userinfo)
+    parsed, hostname, port = _parse_host_part(scheme, host_part, label, userinfo is not None)
+    return UrlParts(scheme.lower(), username, password, hostname, port,
+                    parsed.path or "", parsed.query or "", parsed.fragment or "")
+
+
+def url_query(url: str) -> str:
+    """The query of a connection URL by the shared rule, or "" when the URL
+    does not parse (the connect path then reports that, generically). A
+    password holding `?` never becomes the query, as it did with urlparse."""
+    try:
+        return parse_url(url, "Database").query
+    except ValueError:
+        return ""
+
+
+def normalise_url(url: str, label: str = "Connection URL") -> str:
+    """The same URL with its userinfo percent-encoded, for third-party clients.
+
+    redis-py and pymongo parse a URL with ``urlparse`` themselves, so a password
+    holding `/ ? # @` is misread there (and quoted in THEIR errors). Encoding
+    the userinfo by the rule above hands them a URL they read the way Tina4
+    does. Already-encoded input is decoded first, so nothing is encoded twice.
+    Refuses a malformed URL with :func:`parse_url`'s generic errors.
+    """
+    parts = parse_url(url, label)
+    scheme, userinfo, host_part = _split_userinfo(url, label)
+    if userinfo is None:
+        return url
+    auth = quote(parts.username or "", safe="")
+    if parts.password is not None:
+        auth += ":" + quote(parts.password, safe="")
+    return f"{scheme}://{auth}@{host_part}"
+
 
 # URL scheme to CANONICAL engine. Alias resolution happens ONCE, here, so
 # nothing downstream ever compares raw schemes.
@@ -283,31 +537,16 @@ class DatabaseUrl:
         carrying the credential. When there is no scheme there is nothing safe
         left to echo, so we name the fault and the expected shape instead.
         """
-        try:
-            parsed = urlparse(url)
-            scheme = (parsed.scheme or "").lower()
-            # Read every attribute inside the guard: `.port` and `.hostname` are
-            # lazy properties and raise for a non-integer port or a malformed
-            # IPv6 literal, long after urlparse() itself returned.
-            host = parsed.hostname or None
-            port = parsed.port
-            raw_username = parsed.username
-            raw_password = parsed.password
-            path = parsed.path or ""
-        except ValueError as reason:
-            # stdlib's text names only the offending token (e.g. "Port could not
-            # be cast to integer value as 'notaport'"), never the userinfo - but
-            # it does not identify itself as a Tina4 error. Re-raise as ours and
-            # break the chain: a chained frame is one more place holding the raw
-            # URL for a debugger or a traceback renderer to pick up.
-            raise ValueError(f"DatabaseUrl: Invalid URL - {reason}") from None
-
-        if scheme == "":
-            raise ValueError(
-                "DatabaseUrl: Invalid URL format - no 'driver://' scheme. "
-                "Expected driver://user:password@host:port/database. "
-                "The value is not shown because it may contain a password."
-            )
+        # GHSA-h2mr-m3v3-cq8c: split by the ONE shared rule (userinfo ends at
+        # the LAST `@`), not by urlparse, which read `u:Pq1/Rs2@host` as host
+        # `u`, port `Pq1` and raised a stdlib message quoting the password.
+        # parse_url refuses a URL without `driver://` (so `postgres:/u:pw@h`
+        # and `postgres//u:pw@h` too) generically and never chains (from None).
+        parts = parse_url(url, "DatabaseUrl")
+        scheme = parts.scheme
+        host = parts.hostname
+        port = parts.port
+        path = parts.path
 
         engine = ENGINE_ALIASES.get(scheme)
         if engine is None:
@@ -319,11 +558,11 @@ class DatabaseUrl:
         self.engine = engine
         self.host = host
         self.port = port or DEFAULT_PORTS.get(engine)
-        self.username = unquote(raw_username) if raw_username else None
-        # `is not None`, not truthiness: `postgres://user:@host/db` carries an
-        # EXPLICITLY EMPTY password, which is a different value from no password
-        # at all and must not let the env fallback fire. See __init__.
-        self.password = unquote(raw_password) if raw_password is not None else None
+        self.username = parts.username
+        # None vs "": `postgres://user:@host/db` carries an EXPLICITLY EMPTY
+        # password, which is a different value from no password at all and
+        # must not let the env fallback fire. See __init__. (parse_url decodes.)
+        self.password = parts.password
 
         # Strip EXACTLY ONE leading slash - the URL path separator. Stripping
         # every slash turns the documented absolute Firebird form
@@ -369,8 +608,7 @@ def url_credentials(connection_string: str,
         The decoded ``(username, password)`` pair; empty strings when neither
         the URL nor the fallback supplies one.
     """
-    parsed = urlparse(connection_string)
-    user = unquote(parsed.username) if parsed.username else (username or "")
-    raw_password = parsed.password
-    pwd = unquote(raw_password) if raw_password is not None else (password or "")
+    parsed = parse_url(connection_string, "Database")
+    user = parsed.username or (username or "")
+    pwd = parsed.password if parsed.password is not None else (password or "")
     return user, pwd

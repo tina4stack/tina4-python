@@ -34,6 +34,38 @@ import time
 import zlib
 
 
+
+def kafka_broker_list(value: str) -> str:
+    """A Kafka broker list with no credential in it: ``host:port[,host:port]``.
+
+    GHSA-h2mr-m3v3-cq8c. ``kafka://user:password@host:9092`` used to reach the
+    broker list whole, and the broker list is what librdkafka logs and what
+    every Kafka connection error here quotes. Kafka has no userinfo: its
+    credentials are SASL settings (TINA4_KAFKA_SASL_USERNAME /
+    TINA4_KAFKA_SASL_PASSWORD), so everything up to the LAST `@` - the one URL
+    rule the framework uses - is dropped. A broker whose port is not a number
+    may be a password (``kafka://user:password``) and is refused without
+    echoing the value.
+    """
+    from tina4_python.database.database_url import _NOT_SHOWN
+
+    rest = value or ""
+    if rest.lower().startswith("kafka://"):
+        rest = rest[len("kafka://"):]
+    rest = rest.rpartition("@")[2]
+    for end in ("/", "?", "#"):
+        rest = rest.split(end, 1)[0]
+    for broker in (b.strip() for b in rest.split(",")):
+        port = broker.rpartition("]")[2].partition(":")[2] if broker.startswith("[") \
+            else broker.partition(":")[2]
+        if port and not (port.isdigit() and port.isascii()):
+            raise ValueError(
+                "Kafka broker list: a broker port is not a number. Expected "
+                f"host:port[,host:port]. {_NOT_SHOWN}"
+            )
+    return rest
+
+
 class KafkaConnector:
     """Kafka queue backend implementing the Tina4 queue contract.
 
@@ -56,9 +88,9 @@ class KafkaConnector:
     FETCH_MAX_WAIT_MS = 5000   # the broker long-polls this long for an empty partition
 
     def __init__(self, **config):
-        self._brokers = config.get(
+        self._brokers = kafka_broker_list(config.get(
             "brokers", os.environ.get("TINA4_KAFKA_BROKERS", "localhost:9092")
-        )
+        ))
         self._group_id = config.get(
             "group_id", os.environ.get("TINA4_KAFKA_GROUP_ID", "tina4_consumer_group")
         )

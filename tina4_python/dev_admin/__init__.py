@@ -725,15 +725,35 @@ def get_api_handlers() -> dict:
 _APPLE_PLATFORMS = ("darwin", "ios", "tvos", "watchos")
 
 
+def _proc_status_mb(field: str) -> float:
+    """A kB field of ``/proc/self/status`` (Linux, Android) in MB.
+
+    Raises OSError where there is no procfs or no such line.
+    """
+    with open("/proc/self/status", encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith(field + ":"):
+                return round(int(line.split()[1]) / 1024.0, 2)
+    raise OSError(f"no {field} line in /proc/self/status")
+
+
 def _peak_rss_mb() -> float:
     """Peak resident set size of this process, in MB.
 
-    ``ru_maxrss`` is in bytes on Apple's kernel (macOS, and the ``ios``,
-    ``tvos`` and ``watchos`` values newer Pythons report) and in kilobytes
-    everywhere else (Linux, Android, the BSDs), so it is divided by 1024 twice
-    there and once elsewhere. Raises ImportError where there is no
-    ``resource`` module (Windows).
+    ``VmHWM`` from procfs where there is one: it is this process's own
+    high-water mark. ``ru_maxrss`` is not - Linux starts a child's at the
+    parent's RSS at fork and keeps it across exec, so a server launched by a
+    large parent reported the parent's size as its peak.
+
+    Elsewhere ``ru_maxrss``: bytes on Apple's kernel (macOS, and the ``ios``,
+    ``tvos`` and ``watchos`` values newer Pythons report) and kilobytes on the
+    BSDs, so it is divided by 1024 twice there and once elsewhere. Raises
+    ImportError where there is no ``resource`` module (Windows).
     """
+    try:
+        return _proc_status_mb("VmHWM")
+    except OSError:
+        pass
     import resource
     import sys
 
@@ -755,11 +775,7 @@ def _current_rss_mb() -> float:
         return round(psutil.Process().memory_info().rss / 1024.0 / 1024.0, 2)
     except Exception:
         pass
-    with open("/proc/self/status", encoding="utf-8") as fh:
-        for line in fh:
-            if line.startswith("VmRSS:"):
-                return round(int(line.split()[1]) / 1024.0, 2)
-    raise OSError("no VmRSS line in /proc/self/status")
+    return _proc_status_mb("VmRSS")
 
 
 async def _api_status(request, response):

@@ -13,8 +13,7 @@ MySQL/MariaDB adapter using mysql-connector-python.
 Requires: pip install mysql-connector-python
 """
 import re
-from urllib.parse import urlparse
-from tina4_python.database.database_url import url_credentials
+from tina4_python.database.database_url import parse_url, url_credentials
 from tina4_python.database.adapter import (
     DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     connect_deadline, driver_connect_timeout_seconds,
@@ -52,9 +51,11 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
                 "    uv add tina4-python[all-db]           # all five database drivers"
             )
 
-        parsed = urlparse(connection_string)
+        # The shared rule (GHSA-h2mr-m3v3-cq8c): urlparse misread a password
+        # holding `/ ? #` as host:port and its error quoted the password.
+        parsed = parse_url(connection_string, "Database")
 
-        # Percent-DECODED: urlparse leaves userinfo escaped.
+        # Percent-DECODED (parse_url decodes; urlparse left userinfo escaped).
 
         _url_user, _url_pass = url_credentials(connection_string, username, password)
         host = parsed.hostname or "localhost"

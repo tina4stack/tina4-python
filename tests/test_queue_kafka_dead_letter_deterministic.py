@@ -46,9 +46,16 @@ if not _reachable():
     pytest.skip(f"Kafka not reachable at {KAFKA_URL}", allow_module_level=True)
 
 
+@pytest.fixture(autouse=True)
+def _kafka_queue_env(monkeypatch):
+    """Point Queue at Kafka for THIS module only. Writing os.environ directly
+    leaked a scheme-less TINA4_QUEUE_URL into every later test in the worker,
+    so a RabbitMQ Queue built afterwards parsed `127.0.0.1:9092` as its URL."""
+    monkeypatch.setenv("TINA4_QUEUE_BACKEND", "kafka")
+    monkeypatch.setenv("TINA4_QUEUE_URL", KAFKA_URL)
+
+
 def _make_queue():
-    os.environ["TINA4_QUEUE_BACKEND"] = "kafka"
-    os.environ["TINA4_QUEUE_URL"] = KAFKA_URL
     return Queue(topic=f"kdl_{uuid.uuid4().hex[:10]}", max_retries=1)
 
 

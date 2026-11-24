@@ -14,8 +14,8 @@ Requires: pip install firebird-driver  (or pip install fdb for legacy)
 """
 import os
 import re
-from urllib.parse import urlparse, unquote, parse_qs
-from tina4_python.database.database_url import url_credentials
+from urllib.parse import unquote, parse_qs
+from tina4_python.database.database_url import parse_url, url_credentials, url_query
 from tina4_python.database.adapter import (
     DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     call_with_deadline, connect_deadline,
@@ -94,7 +94,8 @@ def _resolve_firebird_charset(connection_string: str, kwarg_charset: str | None 
     connection is opened, so it is unit-testable without a live server.
     """
     url_charset = None
-    query = urlparse(connection_string).query
+    # The shared rule (GHSA-h2mr-m3v3-cq8c): a password holding `?` is not a query.
+    query = url_query(connection_string)
     if query:
         values = parse_qs(query).get("charset")
         if values:
@@ -169,7 +170,8 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
                 "    uv add tina4-python[all-db]      # all five database drivers"
             )
 
-        parsed = urlparse(connection_string)
+        # The shared rule (GHSA-h2mr-m3v3-cq8c), never urlparse: see database_url.
+        parsed = parse_url(connection_string, "Database")
         host = parsed.hostname or "localhost"
         port = parsed.port or 3050
 

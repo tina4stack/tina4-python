@@ -47,8 +47,10 @@ def _connect_or_explain(adapter: DatabaseAdapter, path: str,
         # a connection error would bury the one instruction that fixes it.
         raise
     except Exception as cause:
+        # The driver's own text goes through the primitive as well: a driver
+        # that echoes its DSN must not undo the redaction of the target.
         raise ConnectionError(
-            f"Database: could not connect to {redact_url(path)}: {cause}"
+            f"Database: could not connect to {redact_url(path)}: {redact_url(str(cause))}"
         ) from cause
 
 

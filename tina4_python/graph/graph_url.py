@@ -10,7 +10,9 @@ for SQL. Engine is the CANONICAL name the factory selects an adapter by; a
 scheme alias (bolt -> neo4j is NOT assumed — bolt stays bolt so Memgraph can
 share it) resolves to its engine here.
 """
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import parse_qs
+
+from tina4_python.database.database_url import parse_url
 
 
 # scheme -> canonical engine. bolt/neo4j/memgraph all speak Bolt/Cypher and share
@@ -40,8 +42,11 @@ class GraphUrl:
 
     def __init__(self, url: str):
         self.raw = url
-        parsed = urlparse(url)
-        scheme = (parsed.scheme or "").lower()
+        # The shared rule (GHSA-h2mr-m3v3-cq8c): urlparse's `.port` raised
+        # "Port could not be cast to integer value as 'Pq1'" for a password
+        # holding `/`, quoting it. parse_url refuses generically (from None).
+        parsed = parse_url(url, "Graph URL")
+        scheme = parsed.scheme
         engine = _SCHEME_ENGINE.get(scheme)
         if engine is None:
             raise ValueError(
@@ -55,8 +60,8 @@ class GraphUrl:
         self.port = parsed.port or _ENGINE_DEFAULT_PORT.get(engine)
         # path is the graph/database name (leading slash stripped).
         self.graph = (parsed.path or "").lstrip("/") or None
-        self.username = unquote(parsed.username) if parsed.username else None
-        self.password = unquote(parsed.password) if parsed.password else None
+        self.username = parsed.username or None
+        self.password = parsed.password or None
         self.params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         # TLS if the scheme says so (…s) or ?tls=1.
         self.use_tls = scheme.endswith("s") or self.params.get("tls") in ("1", "true")
