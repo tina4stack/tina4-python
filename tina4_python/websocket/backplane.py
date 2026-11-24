@@ -83,7 +83,12 @@ class RedisBackplane(WebSocketBackplane):
         self._url = url or os.environ.get(
             "TINA4_WS_BACKPLANE_URL", "redis://localhost:6379"
         )
-        self._redis = redis.Redis.from_url(self._url)
+        # redis-py splits the URL with urlparse and its ValueError quoted a
+        # password holding `/` (GHSA-h2mr-m3v3-cq8c). Hand it the userinfo
+        # encoded by the framework's one rule; a malformed URL is refused
+        # without echoing it.
+        from tina4_python.database.database_url import normalise_url
+        self._redis = redis.Redis.from_url(normalise_url(self._url, "Backplane URL"))
         self._pubsub = self._redis.pubsub()
         # ONE listener thread for the one pub/sub connection. A thread per
         # subscribe() had several threads reading the same socket, and close()

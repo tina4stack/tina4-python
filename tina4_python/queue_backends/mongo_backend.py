@@ -93,7 +93,10 @@ class MongoConnector:
     def connect(self):
         """Connect to MongoDB and ensure indexes exist."""
         if self._uri:
-            self._client = self._pymongo.MongoClient(self._uri)
+            # Userinfo encoded by the shared rule (GHSA-h2mr-m3v3-cq8c), so
+            # pymongo neither misreads nor quotes a password holding `/ ? # @`.
+            from tina4_python.database.database_url import normalise_url
+            self._client = self._pymongo.MongoClient(normalise_url(self._uri, "Queue MongoDB URL"))
         else:
             kwargs = {"host": self._host, "port": self._port}
             if self._username:

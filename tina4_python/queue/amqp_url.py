@@ -41,39 +41,37 @@ for no benefit. Every other shape follows the spec exactly.
 """
 from urllib.parse import unquote
 
+from tina4_python.database.database_url import parse_url
+
 
 def parse_amqp_url(url: str) -> dict:
     """Parse amqp://user:pass@host:port/vhost into a config dict.
 
     Only keys actually present in the URL are set, so a caller's own defaults
     survive for everything the URL does not mention.
+
+    GHSA-h2mr-m3v3-cq8c: this split the userinfo at the FIRST `@` (so a
+    password `Pq1@Rs2` made `Rs2@host` the host name) and ran ``int()`` on
+    whatever followed the first `:` (``amqp://u:Pq1Rs2`` raised "invalid
+    literal for int() with base 10: 'Pq1Rs2'"). It now uses the framework's
+    one URL rule - userinfo ends at the LAST `@` - and refuses a malformed URL
+    without echoing it. Credentials are percent-decoded, as the RabbitMQ URI
+    spec requires (``p%40ss`` is the password ``p@ss``).
     """
+    parsed = parse_url(url, "AMQP URL")
     config = {}
-    rest = url
-    for scheme in ("amqp://", "amqps://"):
-        if rest.startswith(scheme):
-            rest = rest[len(scheme):]
-            break
+    if parsed.username is not None:
+        config["username"] = parsed.username
+    if parsed.password is not None:
+        config["password"] = parsed.password
 
-    if "@" in rest:
-        creds, rest = rest.split("@", 1)
-        if ":" in creds:
-            config["username"], config["password"] = creds.split(":", 1)
-        else:
-            config["username"] = creds
+    # An empty segment means "not specified" - see the deviation note above.
+    vhost = parsed.path[1:] if parsed.path.startswith("/") else parsed.path
+    if vhost:
+        config["vhost"] = unquote(vhost)
 
-    if "/" in rest:
-        hostport, vhost = rest.split("/", 1)
-        # An empty segment means "not specified" - see the deviation note above.
-        if vhost:
-            config["vhost"] = unquote(vhost)
-    else:
-        hostport = rest
-
-    if ":" in hostport:
-        host, port = hostport.split(":", 1)
-        config["host"] = host
-        config["port"] = int(port)
-    elif hostport:
-        config["host"] = hostport
+    if parsed.hostname:
+        config["host"] = parsed.hostname
+    if parsed.port is not None:
+        config["port"] = parsed.port
     return config

@@ -193,6 +193,16 @@ class _MemoryBackend(_CacheBackend):
         return "memory"
 
 
+def _with_scheme(url: str, scheme: str) -> str:
+    """A bare ``host:port`` gets ``scheme://``; anything that already starts
+    with a scheme (even a malformed ``x:/`` or ``x//``) is left for the parser
+    to accept or refuse."""
+    import re
+    if re.match(r"[A-Za-z][A-Za-z0-9+.\-]*(?::/|//)", url or ""):
+        return url
+    return f"{scheme}://{url}"
+
+
 # ── Redis backend ──────────────────────────────────────────────────
 
 
@@ -214,16 +224,18 @@ class _RedisBackend(_CacheBackend):
         # Parse URL: scheme://[user[:password]@]host[:port][/db]. Credentials may
         # also be supplied via TINA4_CACHE_USERNAME / TINA4_CACHE_PASSWORD
         # (mirrors TINA4_DATABASE_USERNAME / TINA4_DATABASE_PASSWORD).
-        from urllib.parse import urlparse, unquote
-        parsed = urlparse(url if "://" in url else "redis://" + url)
+        # The shared rule (GHSA-h2mr-m3v3-cq8c): urlparse's `.port` raised a
+        # stdlib error quoting a password that holds `/ ? #`.
+        from tina4_python.database.database_url import parse_url
+        parsed = parse_url(_with_scheme(url, "redis"), "Cache URL")
         self._host = parsed.hostname or "localhost"
         self._port = parsed.port or 6379
         db_path = (parsed.path or "").lstrip("/")
         self._db = int(db_path) if db_path.isdigit() else 0
-        self._username = (unquote(parsed.username) if parsed.username
-                          else os.environ.get("TINA4_CACHE_USERNAME", "")) or None
-        self._password = (unquote(parsed.password) if parsed.password
-                          else os.environ.get("TINA4_CACHE_PASSWORD", "")) or None
+        self._username = (parsed.username
+                          or os.environ.get("TINA4_CACHE_USERNAME", "")) or None
+        self._password = (parsed.password
+                          or os.environ.get("TINA4_CACHE_PASSWORD", "")) or None
 
         # Try the redis package first
         try:
@@ -626,10 +638,12 @@ class _MemcachedBackend(_CacheBackend):
     """Memcached backend using the zero-dependency text protocol over TCP."""
 
     def __init__(self, url: str = "memcached://localhost:11211", max_entries: int = 1000):
-        cleaned = url.replace("memcached://", "").replace("memcache://", "")
-        parts = cleaned.split("/")[0].split(":")
-        self._host = parts[0] or "localhost"
-        self._port = int(parts[1]) if len(parts) > 1 and parts[1] else 11211
+        # The shared rule (GHSA-h2mr-m3v3-cq8c): splitting at the first `:`
+        # ran int() on `password@host` and the ValueError quoted it.
+        from tina4_python.database.database_url import parse_url
+        parsed = parse_url(_with_scheme(url, "memcached"), "Cache URL")
+        self._host = parsed.hostname or "localhost"
+        self._port = parsed.port or 11211
         self._max_entries = max_entries
         self._prefix = "tina4:cache:"
         # The SHARED namespace generation counter. clear() bumps it; every real
@@ -845,7 +859,10 @@ class _MongoBackend(_CacheBackend):
                     mongo_kwargs["username"] = mu
                 if mp:
                     mongo_kwargs["password"] = mp
-            client = pymongo.MongoClient(url, **mongo_kwargs)
+            # Userinfo encoded by the shared rule, so pymongo reads it as Tina4 does.
+            from tina4_python.database.database_url import normalise_url
+            client = pymongo.MongoClient(normalise_url(_with_scheme(url, "mongodb"), "Cache URL"),
+                                         **mongo_kwargs)
             try:
                 db = client.get_default_database()
             except Exception:

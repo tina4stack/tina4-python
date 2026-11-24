@@ -19,8 +19,7 @@ are silently ignored.  Aggregation beyond what simple regex parsing can
 handle should be done with native pymongo via db.adapter._collection().
 """
 import re
-from urllib.parse import urlparse
-from tina4_python.database.database_url import url_credentials
+from tina4_python.database.database_url import parse_url, url_credentials
 from tina4_python.database.adapter import (
     DatabaseAdapter, DatabaseResult, resolve_connect_timeout,
 )
@@ -406,7 +405,8 @@ class MongoDBAdapter(DatabaseAdapter):
         # Normalise the scheme so MongoClient accepts it
         normalised = re.sub(r"^pymongo://", "mongodb://", connection_string)
 
-        parsed = urlparse(normalised)
+        # The shared rule (GHSA-h2mr-m3v3-cq8c), never urlparse: see database_url.
+        parsed = parse_url(normalised, "Database")
 
         # Inject credentials if not in the URL
         u, p = url_credentials(connection_string, username, password)

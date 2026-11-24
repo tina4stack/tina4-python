@@ -651,7 +651,8 @@ def _console(args=None):
             from tina4_python.database.database_url import redact_url
             print(f"  Database: {redact_url(db_url)}")
         except Exception as e:
-            print(f"  Database: failed ({e})")
+            from tina4_python.database.database_url import redact_url
+            print(f"  Database: failed ({redact_url(str(e))})")
 
     # Auto-discover routes
     from tina4_python.core.server import _auto_discover

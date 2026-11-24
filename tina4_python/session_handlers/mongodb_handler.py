@@ -18,6 +18,7 @@ Environment variables:
 """
 import datetime
 import os
+import re
 import socket
 import struct
 import threading
@@ -112,24 +113,22 @@ class MongoDBSessionHandler(SessionHandler):
         return self._collection_cache
 
     def _parse_url(self, url: str):
-        """Extract host and port from a MongoDB URL."""
-        clean = url
-        if clean.startswith("mongodb://"):
-            clean = clean[len("mongodb://"):]
-        # Strip auth and path
-        if "@" in clean:
-            clean = clean.split("@", 1)[1]
-        if "/" in clean:
-            clean = clean.split("/", 1)[0]
-        if ":" in clean:
-            parts = clean.split(":")
-            self._host = parts[0]
-            try:
-                self._port = int(parts[1])
-            except (ValueError, IndexError):
-                pass
-        else:
-            self._host = clean
+        """Extract host and port from a MongoDB URL.
+
+        GHSA-h2mr-m3v3-cq8c: this cut the userinfo at the FIRST `@`, so a
+        password `Pq1@Rs2` made `Rs2@host` the host name every raw-socket error
+        names. It uses the framework's one URL rule now (userinfo ends at the
+        LAST `@`), and hands pymongo the URL with its userinfo encoded the same
+        way, so pymongo neither misreads it nor quotes it in an InvalidURI.
+        A bare ``host[:port]`` is still accepted.
+        """
+        from tina4_python.database.database_url import normalise_url, parse_url
+        if not re.match(r"[A-Za-z][A-Za-z0-9+.\-]*(?::/|//)", url):
+            url = f"mongodb://{url}"
+        parsed = parse_url(url, "Session MongoDB URL")
+        self._host = parsed.hostname or self._host
+        self._port = parsed.port or self._port
+        self._mongo_url = normalise_url(url, "Session MongoDB URL")
 
     # ── SessionHandler Interface ─────────────────────────────────
 
