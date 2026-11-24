@@ -18,9 +18,9 @@ then quoted into the logged ConnectionError.
 THE CASES are the shared four-framework list in
 ``tests/fixtures/db_url_redaction_cases.json``: every password x every template
 x every scheme the path supports, fed to the REAL redactor, the REAL parsers and
-the REAL connect/error paths (live drivers dialling a 127.0.0.1 listener that
-hangs up, or a closed port). Nothing is mocked. Every output a human could see is
-checked: the return value, ``str``/``repr`` of the exception AND of every
+the REAL connect/error paths (live drivers dialling a loopback listener that
+refuses them at once - on the scheme's default port for a host-less URL).
+Nothing is mocked. Every output a human could see is checked: the return value, ``str``/``repr`` of the exception AND of every
 exception in its ``__cause__``/``__context__`` chain, captured log records, and
 everything written to stdout/stderr at the file-descriptor level (which also
 catches C drivers that log on their own).
@@ -107,33 +107,101 @@ def _assert_clean(leaks: list[str]):
     assert not leaks, f"{len(leaks)} leak(s):\n" + "\n".join(leaks[:8])
 
 
-@pytest.fixture
-def hangup_port():
-    """A real 127.0.0.1 listener that accepts and immediately hangs up.
+class _RefusingListener:
+    """A real loopback listener that refuses every client at once.
 
-    A CLOSED port costs ~2s per attempt on Windows (SYN retries after RST); a
-    listener that hangs up makes every driver take its own error path at once.
+    It hangs up as soon as a client connects, so every live driver takes its
+    OWN error path immediately (a CLOSED port costs ~2s per attempt on Windows:
+    SYN retries after RST). With ``reply=True`` it first reads the client's
+    command and answers one generic RESP error line: redis-py retries a dropped
+    connection for seconds but does not retry an error reply. Nothing in the
+    framework is patched.
     """
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("127.0.0.1", 0))
-    server.listen(64)
-    stop = threading.Event()
 
-    def serve():
-        server.settimeout(0.2)
-        while not stop.is_set():
+    def __init__(self, port: int = 0, reply: bool = False):
+        self.reply = reply
+        self.sockets = []
+        self._stop = threading.Event()
+        families = [(socket.AF_INET, "127.0.0.1")]
+        if port and socket.has_ipv6:
+            families.append((socket.AF_INET6, "::1"))  # `localhost` may resolve to ::1 first
+        for family, host in families:
+            server = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                server.bind((host, port))
+            except OSError as error:
+                server.close()
+                if family == socket.AF_INET6 and getattr(error, "winerror", None) != 10048 \
+                        and error.errno not in (98, 48):
+                    continue  # no IPv6 loopback here: the IPv4 listener still serves
+                self.close()
+                raise
+            server.listen(64)
+            server.settimeout(0.2)
+            self.sockets.append(server)
+            port = port or server.getsockname()[1]
+            threading.Thread(target=self._serve, args=(server,), daemon=True).start()
+        self.port = port
+
+    def _serve(self, server):
+        while not self._stop.is_set():
             try:
                 conn, _ = server.accept()
-                conn.close()
             except OSError:
                 continue
+            if not self.reply:
+                conn.close()
+                continue
+            threading.Thread(target=self._refuse, args=(conn,), daemon=True).start()
 
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-    yield server.getsockname()[1]
-    stop.set()
-    thread.join(timeout=2)
-    server.close()
+    @staticmethod
+    def _refuse(conn):
+        try:
+            conn.settimeout(0.2)
+            try:
+                conn.recv(4096)
+            except OSError:
+                pass
+            conn.sendall(b"-ERR refused\r\n")
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    def close(self):
+        self._stop.set()
+        for server in self.sockets:
+            server.close()
+
+
+@pytest.fixture(scope="module")
+def listeners():
+    """An ephemeral-port listener, plus one per DEFAULT port on demand.
+
+    A host-less URL (`scheme://u:pw@/appdb`) dials the scheme's default port
+    on localhost, so that port gets a refusing listener too. If the machine
+    already uses it, only the cases that need it are skipped, with a
+    machine-readable reason - never a silent pass.
+    """
+    opened = {}
+    busy = set()
+
+    def get(port: int = 0, reply: bool = False) -> int:
+        if port in busy:
+            pytest.skip(f"[needs:free-port={port}]")
+        if (port, reply) not in opened:
+            try:
+                opened[(port, reply)] = _RefusingListener(port, reply)
+            except OSError:
+                if not port:
+                    raise
+                busy.add(port)
+                pytest.skip(f"[needs:free-port={port}]")
+        return opened[(port, reply)].port
+
+    yield get
+    for listener in opened.values():
+        listener.close()
 
 
 @pytest.fixture
@@ -338,12 +406,38 @@ def test_an_unencoded_at_in_the_query_is_refused():
 # ── 3. The real connect / error paths ─────────────────────────────────────
 
 
-def _connect_matrix():
-    return [(t, p) for t, p in MATRIX if not (t == HOSTLESS_TEMPLATE and "@" in p)]
+# The port a host-less URL dials: the scheme's default (the adapter's or the
+# client library's), on localhost.
+DEFAULT_PORT = {
+    "postgres": 5432, "mysql": 3306, "mssql": 1433, "firebird": 3050, "mongodb": 27017,
+    "redis": 6379, "rediss": 6379, "valkey": 6379, "memcached": 11211,
+    "amqp": 5672, "amqps": 5672, "kafka": 9092, "mqtt": 1883, "tcp": 1883, "mqtts": 8883,
+    "ultipa": 60061, "ultipas": 60061, "neo4j": 7687, "neo4j+s": 7687, "bolt": 7687,
+    "bolt+s": 7687, "memgraph": 7687, "arango": 8529, "arangodb": 8529,
+}
+# Only the template with NO host part dials localhost. `scheme://u:pw` reads as
+# host `u` (and is refused at parse), so it needs no default-port listener.
+HOSTLESS = {"{scheme}://u:{pw}@/appdb"}
+# Clients that retry a dropped connection (redis-py) get an error reply instead.
+REPLY_SCHEMES = {"redis", "rediss", "valkey"}
+
+# `scheme://u:Pq1@Rs2` names the host Rs2 (see the module docstring): not dialled.
+CONNECT_MATRIX = [(t, p) for t, p in MATRIX if not (t == HOSTLESS_TEMPLATE and "@" in p)]
 
 
-CONNECT_MATRIX = _connect_matrix()
-CONNECT_IDS = [f"t{TEMPLATES.index(t) + 1}-{p}" for t, p in CONNECT_MATRIX]
+def _connect_cases(schemes):
+    cases = [(s, t, p) for s in schemes for t, p in CONNECT_MATRIX]
+    ids = [f"{s}-t{TEMPLATES.index(t) + 1}-{p}" for s, t, p in cases]
+    return pytest.mark.parametrize("scheme, template, password", cases, ids=ids)
+
+
+def _target(listeners, template, scheme, password) -> str:
+    """The case URL aimed at a refusing listener: the ephemeral one, or for a
+    host-less template the scheme's default port (skipped if that is busy)."""
+    if template in HOSTLESS:
+        listeners(DEFAULT_PORT[scheme], scheme in REPLY_SCHEMES)
+        return _url(template, scheme, password)
+    return _local_url(template, scheme, password, listeners(0, scheme in REPLY_SCHEMES))
 
 
 def _run(action) -> list[str]:
@@ -354,59 +448,55 @@ def _run(action) -> list[str]:
     return []
 
 
-@pytest.mark.parametrize("template, password", CONNECT_MATRIX, ids=CONNECT_IDS)
-def test_database_connect_failure_never_shows_the_password(template, password, hangup_port, captured):
+DB_DRIVERS = {"postgres": "psycopg2", "mysql": "mysql.connector", "mssql": "pymssql",
+              "firebird": "firebird.driver", "mongodb": "pymongo"}
+
+
+@_connect_cases(list(DB_DRIVERS))
+def test_database_connect_failure_never_shows_the_password(scheme, template, password, listeners,
+                                                           captured, monkeypatch):
+    pytest.importorskip(DB_DRIVERS[scheme])
     from tina4_python.database import Database
 
-    secrets = _secrets(template, password)
-    leaks = []
-    for scheme, module in (("postgres", "psycopg2"), ("mysql", "mysql.connector"),
-                           ("mssql", "pymssql"), ("firebird", "firebird.driver"),
-                           ("mongodb", "pymongo")):
-        pytest.importorskip(module)
-        url = _local_url(template, scheme, password, hangup_port)
-        shown = _run(lambda: Database(url).close())
-        leaks += [f"{scheme}: {leak}" for leak in _leaks(shown + captured(), secrets)]
-    _assert_clean(leaks)
+    # The framework's own connect bound, so no driver can stall a case.
+    monkeypatch.setenv("TINA4_DATABASE_CONNECT_TIMEOUT", "3")
+    url = _target(listeners, template, scheme, password)
+    shown = _run(lambda: Database(url).close())
+    _assert_clean(_leaks(shown + captured(), _secrets(template, password)))
 
 
-@pytest.mark.parametrize("template, password", CONNECT_MATRIX, ids=CONNECT_IDS)
-def test_cache_backends_never_show_the_password(template, password, hangup_port, captured, tmp_path):
+@_connect_cases(CACHE_SCHEMES)
+def test_cache_backends_never_show_the_password(scheme, template, password, listeners, captured, tmp_path):
     from tina4_python.cache import _create_backend
 
-    secrets = _secrets(template, password)
-    leaks = []
-    for scheme in CACHE_SCHEMES:
-        backend = "redis" if scheme == "rediss" else scheme
-        url = _local_url(template, scheme, password, hangup_port)
-        shown = _run(lambda: _create_backend(backend, url, cache_dir=str(tmp_path)))
-        leaks += [f"{scheme}: {leak}" for leak in _leaks(shown + captured(), secrets)]
-    _assert_clean(leaks)
+    backend = "redis" if scheme == "rediss" else scheme
+    url = _target(listeners, template, scheme, password)
+    shown = _run(lambda: _create_backend(backend, url, cache_dir=str(tmp_path)))
+    _assert_clean(_leaks(shown + captured(), _secrets(template, password)))
 
 
-@pytest.mark.parametrize("template, password", CONNECT_MATRIX, ids=CONNECT_IDS)
-def test_queue_backends_never_show_the_password(template, password, hangup_port, captured, monkeypatch):
+@_connect_cases(AMQP_SCHEMES)
+def test_rabbitmq_queue_never_shows_the_password(scheme, template, password, listeners, captured, monkeypatch):
     pytest.importorskip("pika")
-    from tina4_python.queue.kafka_backend import KafkaBackend
     from tina4_python.queue.rabbitmq_backend import RabbitMQBackend
 
-    secrets = _secrets(template, password)
-    leaks = []
-    for scheme in AMQP_SCHEMES:
-        url = _local_url(template, scheme, password, hangup_port)
-        monkeypatch.setenv("TINA4_QUEUE_URL", url)
+    monkeypatch.setenv("TINA4_QUEUE_URL", _target(listeners, template, scheme, password))
 
-        def rabbit():
-            backend = RabbitMQBackend("ghsa_topic", 1)
-            try:
-                backend._backend.connect()
-            finally:
-                backend._backend.close()
+    def rabbit():
+        backend = RabbitMQBackend("ghsa_topic", 1)
+        try:
+            backend._backend.connect()
+        finally:
+            backend._backend.close()
 
-        leaks += [f"{scheme}: {leak}" for leak in _leaks(_run(rabbit) + captured(), secrets)]
+    _assert_clean(_leaks(_run(rabbit) + captured(), _secrets(template, password)))
 
-    url = _local_url(template, "kafka", password, hangup_port)
-    monkeypatch.setenv("TINA4_QUEUE_URL", url)
+
+@_connect_cases(["kafka"])
+def test_kafka_queue_never_shows_the_password(scheme, template, password, listeners, captured, monkeypatch):
+    from tina4_python.queue.kafka_backend import KafkaBackend
+
+    monkeypatch.setenv("TINA4_QUEUE_URL", _target(listeners, template, scheme, password))
     monkeypatch.delenv("TINA4_KAFKA_BROKERS", raising=False)
     shown_brokers = []
 
@@ -414,42 +504,50 @@ def test_queue_backends_never_show_the_password(template, password, hangup_port,
         backend = KafkaBackend("ghsa_topic", 1)
         # The broker list is what librdkafka logs and every Kafka error quotes.
         shown_brokers.append(backend._backend._brokers)
-        backend._backend._connect_raw()
-        backend._backend._close_raw()
+        if backend._backend._brokers:
+            # An EMPTY list (host-less URL) names no broker to dial; the raw
+            # connector would resolve "" to every interface, not loopback.
+            backend._backend._connect_raw()
+            backend._backend._close_raw()
 
     shown = _run(kafka) + shown_brokers + captured()
-    leaks += [f"kafka: {leak}" for leak in _leaks(shown, secrets)]
-    _assert_clean(leaks)
+    _assert_clean(_leaks(shown, _secrets(template, password)))
 
 
-@pytest.mark.parametrize("template, password", CONNECT_MATRIX, ids=CONNECT_IDS)
-def test_mqtt_graph_backplane_and_session_never_show_the_password(template, password, hangup_port, captured):
-    pytest.importorskip("redis")
-    pytest.importorskip("pymongo")
-    from tina4_python.graph import GraphDatabase
+@_connect_cases(MQTT_SCHEMES)
+def test_mqtt_never_shows_the_password(scheme, template, password, listeners, captured):
     from tina4_python.mqtt import Mqtt
-    from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
+
+    url = _target(listeners, template, scheme, password)
+    shown = _run(lambda: Mqtt(url, timeout=1).disconnect())
+    _assert_clean(_leaks(shown + captured(), _secrets(template, password)))
+
+
+@_connect_cases(GRAPH_SCHEMES)
+def test_graph_factory_never_shows_the_password(scheme, template, password, listeners, captured):
+    from tina4_python.graph import GraphDatabase
+
+    url = _target(listeners, template, scheme, password)
+    shown = _run(lambda: GraphDatabase.create(url))
+    _assert_clean(_leaks(shown + captured(), _secrets(template, password)))
+
+
+@_connect_cases(["redis", "rediss"])
+def test_websocket_backplane_never_shows_the_password(scheme, template, password, listeners, captured):
+    pytest.importorskip("redis")
     from tina4_python.websocket.backplane import RedisBackplane
 
-    secrets = _secrets(template, password)
-    leaks = []
+    url = _target(listeners, template, scheme, password)
+    shown = _run(lambda: RedisBackplane(url).close())
+    _assert_clean(_leaks(shown + captured(), _secrets(template, password)))
 
-    for scheme in MQTT_SCHEMES:
-        url = _local_url(template, scheme, password, hangup_port)
-        shown = _run(lambda: Mqtt(url, timeout=1).disconnect())
-        leaks += [f"{scheme}: {leak}" for leak in _leaks(shown + captured(), secrets)]
 
-    for scheme in GRAPH_SCHEMES:
-        url = _local_url(template, scheme, password, hangup_port)
-        shown = _run(lambda: GraphDatabase.create(url))
-        leaks += [f"{scheme}: {leak}" for leak in _leaks(shown + captured(), secrets)]
+@_connect_cases(["mongodb"])
+def test_mongodb_session_handler_never_shows_the_password(scheme, template, password, listeners, captured):
+    pytest.importorskip("pymongo")
+    from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
 
-    for scheme in ("redis", "rediss"):
-        url = _local_url(template, scheme, password, hangup_port)
-        shown = _run(lambda: RedisBackplane(url).close())
-        leaks += [f"backplane {scheme}: {leak}" for leak in _leaks(shown + captured(), secrets)]
-
-    url = _local_url(template, "mongodb", password, hangup_port)
+    url = _target(listeners, template, scheme, password)
     handler_host = []
 
     def session():
@@ -461,5 +559,4 @@ def test_mqtt_graph_backplane_and_session_never_show_the_password(template, pass
             handler.close()
 
     shown = _run(session) + handler_host + captured()
-    leaks += [f"mongodb session: {leak}" for leak in _leaks(shown, secrets)]
-    _assert_clean(leaks)
+    _assert_clean(_leaks(shown, _secrets(template, password)))
